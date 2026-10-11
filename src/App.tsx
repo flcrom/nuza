@@ -8,6 +8,7 @@ import WritingStats from "./components/WritingStats";
 import Sidebar, { SidebarHandle } from "./components/Sidebar";
 import SettingsModal from "./components/SettingsModal";
 import FileSearchPalette from "./components/FileSearchPalette";
+import SettingsPalette from "./components/SettingsPalette";
 import ChangedOnDisk from "./components/ChangedOnDisk";
 import RecoveredEdits from "./components/RecoveredEdits";
 import SidePane from "./components/SidePane";
@@ -24,6 +25,7 @@ import ZenBar from "./components/ZenBar";
 import { zenFocus } from "./lib/markdown/zen";
 import { formatBinding } from "./lib/keybinding";
 import type { KeymapAction } from "./lib/keymaps";
+import type { ToggleSetting } from "./lib/settingsSearch";
 import { useVimMode } from "./hooks/useVimMode";
 import { useVaults } from "./hooks/useVaults";
 import { useAppearance } from "./hooks/useAppearance";
@@ -80,6 +82,7 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
+  const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
   // Off by default: Vim is something you go and turn on, not something a note
   // taking app should assume about whoever just opened it.
   const [vimEnabled, setVimEnabled] = usePersistedState("vimEnabled", false);
@@ -508,6 +511,89 @@ function App() {
   }, [returnFocusToEditor]);
   const openSettings = useCallback(() => setIsSettingsOpen(true), []);
   const closeQuickOpen = useCallback(() => setIsQuickOpenOpen(false), []);
+  const closeQuickSettings = useCallback(() => {
+    setIsQuickSettingsOpen(false);
+    returnFocusToEditor();
+  }, [returnFocusToEditor]);
+
+  /** Everything in settings that is a switch, for the palette that flips them. */
+  const toggleSettings = useMemo<ToggleSetting[]>(
+    () => [
+      {
+        id: "vim-mode",
+        title: "Vim Mode",
+        description: "Enable Vim keybindings for the editor",
+        enabled: vimEnabled,
+        onToggle: setVimEnabled,
+      },
+      {
+        id: "line-numbers",
+        title: "Line Numbers",
+        description: "Show line numbers in the editor gutter",
+        enabled: showLineNumbers,
+        onToggle: setShowLineNumbers,
+      },
+      {
+        id: "typewriter-scrolling",
+        title: "Typewriter Scrolling",
+        description: "Keep the line you are writing in the middle of the window",
+        enabled: typewriter,
+        onToggle: setTypewriter,
+      },
+      {
+        id: "section-guides",
+        title: "Section Guides",
+        description: "Marks for a note's headings down the edge",
+        enabled: sectionGuides,
+        onToggle: setSectionGuides,
+      },
+      {
+        id: "zen-mode",
+        title: "Zen Mode",
+        description: "Hide everything but the note",
+        enabled: zen,
+        onToggle: setZen,
+      },
+      {
+        id: "zen-dimming",
+        title: "Dim in Zen Mode",
+        description: "In zen mode, fade everything but the paragraph you are writing",
+        enabled: zenDimming,
+        onToggle: setZenDimming,
+      },
+      {
+        id: "compact-mode",
+        title: "Compact Mode",
+        description: "Tighter rows in the sidebar, tabs and status bars",
+        enabled: compactMode,
+        onToggle: setCompactMode,
+      },
+      {
+        id: "automatic-updates",
+        title: "Automatic Updates",
+        description: "Check for new versions in the background",
+        enabled: autoUpdateEnabled,
+        onToggle: setAutoUpdateEnabled,
+      },
+    ],
+    [
+      vimEnabled,
+      setVimEnabled,
+      showLineNumbers,
+      setShowLineNumbers,
+      typewriter,
+      setTypewriter,
+      sectionGuides,
+      setSectionGuides,
+      zen,
+      zenDimming,
+      setZenDimming,
+      compactMode,
+      setCompactMode,
+      autoUpdateEnabled,
+      setAutoUpdateEnabled,
+    ]
+  );
 
   // Named rather than inlined into the handler table: the macOS menu bar needs
   // the same action, since ⌘W is a key equivalent there and never reaches the
@@ -561,6 +647,7 @@ function App() {
       "new-window": () =>
         void invoke("open_new_window").catch((error) => report("Couldn't open a window", error)),
       "open-settings": () => setIsSettingsOpen((open) => !open),
+      "quick-settings": () => (isQuickSettingsOpen ? closeQuickSettings() : setIsQuickSettingsOpen(true)),
       "toggle-vim-mode": () => setVimEnabled((enabled) => !enabled),
       "check-updates": checkForUpdates,
       "increase-font-size": () =>
@@ -613,6 +700,8 @@ function App() {
       createNote,
       retrace,
       zen,
+      isQuickSettingsOpen,
+      closeQuickSettings,
     ]
   );
 
@@ -906,6 +995,8 @@ function App() {
         placeholder="Link to a note"
         notesOnly
       />
+
+      <SettingsPalette isOpen={isQuickSettingsOpen} onClose={closeQuickSettings} settings={toggleSettings} />
 
       <div className="contents print:hidden">
         <Notices notices={notices} onDismiss={dismissNotice} hold={noticeHold} />
