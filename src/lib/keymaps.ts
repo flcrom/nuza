@@ -6,6 +6,7 @@ export type KeymapAction =
   | "search-files"
   | "quick-open"
   | "open-settings"
+  | "quick-settings"
   | "toggle-vim-mode"
   | "check-updates"
   | "increase-font-size"
@@ -94,6 +95,12 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     defaultBinding: "mod+,",
   },
   {
+    id: "quick-settings",
+    label: "Quick Settings",
+    description: "Flip the on/off settings from a floating search",
+    defaultBinding: "mod+k",
+  },
+  {
     id: "toggle-vim-mode",
     label: "Toggle Vim Mode",
     description: "Enable or disable Vim keybindings",
@@ -163,10 +170,11 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     defaultBinding: "mod+i",
   },
   {
+    // Not mod+k, which is the settings palette.
     id: "insert-link",
     label: "Insert Link",
     description: "Turn the selection into a link",
-    defaultBinding: "mod+k",
+    defaultBinding: "mod+shift+k",
   },
   {
     // Not mod+p, which finds a file - the one shortcut nuza users reach for

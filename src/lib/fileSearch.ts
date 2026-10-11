@@ -17,7 +17,7 @@ const RESULT_LIMIT = 50;
  * "markdown-rendering" - and scores how convincing the match is. Returns null
  * when a query character is missing entirely.
  */
-function fuzzyMatch(text: string, query: string) {
+export function fuzzyMatch(text: string, query: string) {
   const haystack = text.toLowerCase();
   const indices: number[] = [];
   let score = 0;
