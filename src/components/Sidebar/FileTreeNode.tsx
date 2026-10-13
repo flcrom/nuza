@@ -10,6 +10,7 @@ import {
 } from "@/lib/dragSource";
 import { nameProblem } from "@/lib/entryName";
 import { hasUnavailable, parentOf } from "@/lib/fileTree";
+import { samePath } from "@/lib/path";
 import { FileIcon } from "@/lib/utils";
 import { FileEntry } from "@/lib/types";
 import { useTreeContext } from "./TreeContext";
@@ -124,7 +125,9 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
   function wouldTake(e: React.DragEvent) {
     if (carriesFiles(e)) return true;
     const dragging = draggedPath();
-    return !!dragging && dragging !== entry.path && entry.isDirectory;
+    if (!dragging || dragging === entry.path || !entry.isDirectory) return false;
+    // The folder it is already in has nothing to do with it either.
+    return !samePath(parentOf(dragging), entry.path);
   }
 
   function handleDragOver(e: React.DragEvent) {
