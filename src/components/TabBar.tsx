@@ -127,6 +127,28 @@ function TabBar({
         if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
         scroller.scrollLeft += event.deltaY;
       }}
+      // The space beside the tabs. Every drop handler used to be on a tab, so
+      // a tab let go of past the end of the row - which is most of the title
+      // bar, since the strip is sized to its content - was a drag nothing
+      // answered. Reaching the end meant hitting the right half of the last
+      // tab, a target a few pixels wide.
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setDropBefore(paths.length);
+      }}
+      onDrop={(event) => {
+        const moving = event.dataTransfer.getData(TAB_DRAG_TYPE);
+        if (!moving) return;
+        event.preventDefault();
+        // Claimed here as much as on a tab, or letting go of one in the empty
+        // space would read as a release outside the window and tear the note
+        // off into one of its own.
+        takeTabDrag();
+        onReorder(moving, paths.length);
+        endDrag();
+      }}
       className="no-scrollbar flex min-w-0 shrink items-center gap-0.5 overflow-x-auto"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >
@@ -168,6 +190,9 @@ function TabBar({
             onDragOver={(event) => {
               if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
               event.preventDefault();
+              // Claimed, or the strip's own handler below would answer for
+              // this tab as well and put the marker at the end of the row.
+              event.stopPropagation();
               event.dataTransfer.dropEffect = "move";
               // Which half of the tab the pointer is over decides the side.
               const rect = event.currentTarget.getBoundingClientRect();
@@ -177,6 +202,7 @@ function TabBar({
               const moving = event.dataTransfer.getData(TAB_DRAG_TYPE);
               if (!moving || dropBefore === null) return;
               event.preventDefault();
+              event.stopPropagation();
               takeTabDrag();
               onReorder(moving, dropBefore);
               endDrag();
