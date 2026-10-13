@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  chordOf,
   eventToBinding,
   firesWhileTyping,
   formatBinding,
@@ -174,5 +175,39 @@ describe("keys a modifier renames", () => {
     expect(matchesBinding(brace, "mod+alt+7", false)).toBe(false);
     const chord = pressed("7", "Digit7", { ctrl: true, alt: true });
     expect(matchesBinding(chord, "mod+alt+7", false)).toBe(true);
+  });
+});
+
+describe("chordOf", () => {
+  test("off macOS, ctrl is mod", () => {
+    expect(chordOf("ctrl+j", false)).toBe("mod+j");
+    expect(chordOf("mod+j", false)).toBe("mod+j");
+    expect(chordOf("mod+ctrl+j", false)).toBe("mod+j");
+  });
+
+  test("on macOS they stay apart", () => {
+    expect(chordOf("ctrl+j", true)).toBe("ctrl+j");
+    expect(chordOf("mod+j", true)).toBe("mod+j");
+    expect(chordOf("mod+ctrl+j", true)).toBe("mod+ctrl+j");
+  });
+
+  test("puts the modifiers back in the order a binding writes them", () => {
+    expect(chordOf("shift+alt+mod+k", true)).toBe("mod+alt+shift+k");
+  });
+
+  test("an empty binding is an empty chord", () => {
+    expect(chordOf("", false)).toBe("");
+  });
+});
+
+describe("formatBinding, for a binding carrying both mod and ctrl", () => {
+  // It used to be drawn with the same glyph twice, since off macOS both map
+  // to "Ctrl".
+  test("draws the one key it presses off macOS", () => {
+    expect(formatBinding("mod+ctrl+x", false)).toBe("Ctrl+X");
+  });
+
+  test("draws both on macOS, where both are pressed", () => {
+    expect(formatBinding("mod+ctrl+x", true)).toBe("\u2318\u2303X");
   });
 });
