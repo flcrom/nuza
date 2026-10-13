@@ -472,6 +472,24 @@ pub(crate) fn already_exists(error: &std::io::Error) -> bool {
 /// the one that loses moves on to "photo 1.png" instead of writing over the
 /// one that won.
 pub(crate) fn create_unused(directory: &Path, name: &str) -> Result<(fs::File, PathBuf), String> {
+    create_unused_with(directory, name, |candidate| {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(candidate)
+    })
+}
+
+/// `create_unused`, with the creating itself passed in.
+///
+/// Apart from the command for the same reason `list_folder_with` takes a
+/// prober: what matters here is how many times it asks, and that cannot be
+/// seen from outside a function that only talks to the filesystem.
+pub(crate) fn create_unused_with(
+    directory: &Path,
+    name: &str,
+    mut create: impl FnMut(&Path) -> std::io::Result<fs::File>,
+) -> Result<(fs::File, PathBuf), String> {
     let stem = Path::new(name)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -481,25 +499,27 @@ pub(crate) fn create_unused(directory: &Path, name: &str) -> Result<(fs::File, P
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
 
-    let mut last = None;
     for n in 0..10_000 {
         let candidate = match n {
             0 => directory.join(name),
             _ => directory.join(format!("{} {}{}", stem, n, extension)),
         };
 
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match create(&candidate) {
             Ok(file) => return Ok((file, candidate)),
+            // Taken: that is what the numbering is for, so try the next one.
             Err(error) if already_exists(&error) => continue,
-            Err(error) => last = Some(error.to_string()),
+            // Anything else is about the directory rather than the name - it
+            // is read-only, or full, or no longer there - and the next 9,999
+            // names will be refused for the same reason. This used to carry on
+            // regardless, so one attachment dropped somewhere unwritable cost
+            // ten thousand failed `open` calls, each a round trip on a slow or
+            // networked mount, before returning the answer known at the first.
+            Err(error) => return Err(error.to_string()),
         }
     }
 
-    Err(last.unwrap_or_else(|| format!("Could not find a free name for \"{}\"", name)))
+    Err(format!("Could not find a free name for \"{}\"", name))
 }
 
 /// The folder to actually file media in, preferring one already sitting there

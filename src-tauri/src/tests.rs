@@ -1,7 +1,8 @@
 use crate::cli::OpenTarget;
 use crate::files::{
-    already_exists, create_unused, duplicate_file, exact_file_name, move_destination,
-    opened_by_the_system, rename_no_replace, safe_file_name, times_of, write_atomically,
+    already_exists, create_unused, create_unused_with, duplicate_file, exact_file_name,
+    move_destination, opened_by_the_system, rename_no_replace, safe_file_name, times_of,
+    write_atomically,
 };
 // Only asked about where a file has a mode to ask about.
 #[cfg(unix)]
@@ -709,6 +710,52 @@ fn a_dropped_file_comes_back_ready_to_write() {
     drop(file);
 
     assert_eq!(contents(&path), "the bytes");
+}
+
+/// A directory that cannot be written to is asked once, not ten thousand
+/// times. Every candidate name fails for the same reason, and the loop used to
+/// try all of them before returning the error it already had at the first.
+#[test]
+fn a_directory_that_cannot_be_written_to_is_asked_once() {
+    use std::cell::Cell;
+
+    let dir = tempfile::tempdir().unwrap();
+    let asked = Cell::new(0);
+
+    let refused = create_unused_with(dir.path(), "photo.png", |_| {
+        asked.set(asked.get() + 1);
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    });
+
+    assert!(refused.is_err());
+    assert_eq!(
+        asked.get(),
+        1,
+        "asked more than once about a directory that will not have it"
+    );
+}
+
+/// A name that is taken is still worked around, which is what the numbering
+/// is for - the giving up above is only for errors that are not about the name.
+#[test]
+fn a_name_that_is_taken_is_still_numbered_past() {
+    use std::cell::Cell;
+
+    let dir = tempfile::tempdir().unwrap();
+    let asked = Cell::new(0);
+
+    let (_file, path) = create_unused_with(dir.path(), "photo.png", |candidate| {
+        asked.set(asked.get() + 1);
+        // The first two names are taken; the third is free.
+        if asked.get() < 3 {
+            return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+        }
+        fs::File::create(candidate)
+    })
+    .unwrap();
+
+    assert_eq!(asked.get(), 3);
+    assert_eq!(path, dir.path().join("photo 2.png"));
 }
 
 /// A name with no extension is numbered on the end rather than in the
