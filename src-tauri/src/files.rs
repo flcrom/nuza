@@ -291,6 +291,23 @@ pub(crate) fn safe_file_name(name: &str) -> Result<String, String> {
 /// instead, and the sidebar says why.
 pub(crate) fn exact_file_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
+
+    // A hidden name is a name a file can perfectly well have; it is this app
+    // that will not show it. `is_ignored` leaves anything starting with a dot
+    // out of the tree, so that `.git` cannot report thousands of changes a
+    // second - which means a note typed in as `.env` would be made and then
+    // not appear, reading as a creation that failed.
+    //
+    // Said in those words rather than through the refusal below, which is
+    // about names that genuinely cannot be written: `.env` was being turned
+    // down with "is not a name a file can have", which is not true of it.
+    if trimmed.starts_with('.') && !trimmed.trim_matches('.').is_empty() {
+        return Err(format!(
+            "\"{}\" would be hidden, and nuza does not show hidden files",
+            trimmed
+        ));
+    }
+
     if safe_file_name(trimmed)? != trimmed {
         return Err(format!("\"{}\" is not a name a file can have", trimmed));
     }
