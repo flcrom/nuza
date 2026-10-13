@@ -5,6 +5,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isMacPlatform } from "@/lib/platform";
+import { isMainWindow } from "@/lib/windowLabel";
 
 /** Delay before the first background check, so startup isn't slowed down. */
 const INITIAL_CHECK_DELAY_MS = 5_000;
@@ -165,6 +166,15 @@ export function useAppUpdater({ autoUpdate }: UseAppUpdaterOptions) {
   useEffect(() => {
     // Dev builds share the release version, so auto-checking would just nag.
     if (!autoUpdate || import.meta.env.DEV) return;
+    // An update is the app's business, not a window's, and every window runs
+    // one of these. Left ungated, three windows meant three checks five
+    // seconds after launch and every six hours after - and off macOS, three
+    // downloads of the same installer at once, each into a temporary file of
+    // its own. The windows the last run ended with are all restored at launch,
+    // so that is the ordinary case rather than an unusual one.
+    //
+    // The same reasoning already decides which window reopens the last vault.
+    if (!isMainWindow()) return;
 
     const initial = setTimeout(() => runCheck(true), INITIAL_CHECK_DELAY_MS);
     const interval = setInterval(() => runCheck(true), CHECK_INTERVAL_MS);
