@@ -1451,6 +1451,52 @@ mod windows {
             .recv_timeout(Duration::from_millis(500))
             .is_err());
     }
+
+    /// A switch to a folder that cannot be read leaves the window on the one
+    /// it had. The boundary used to move before the listing was attempted, so
+    /// a failure here left the window rooted on a folder the frontend was not
+    /// showing - and every open tab's autosave was refused from then on.
+    ///
+    /// Unix only: the folder is made unreadable with its mode, and Windows
+    /// does not deny a listing that way.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cannot_be_read_leaves_the_vault_where_it_was() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_app, window, _other) = two_windows();
+        let open = tempfile::tempdir().unwrap();
+        let note = open.path().join("note.md");
+        fs::write(&note, "work in progress").unwrap();
+        adopt_folder(&window, open.path().to_string_lossy().into_owned()).unwrap();
+
+        // Enterable, so `is_dir` and `canonicalize` are both happy, and not
+        // listable, so `read_dir` is where it gives up.
+        let shut = tempfile::tempdir().unwrap();
+        fs::set_permissions(shut.path(), fs::Permissions::from_mode(0o300)).unwrap();
+        if fs::read_dir(shut.path()).is_ok() {
+            // Running as root, where the mode is not enforced: nothing to test.
+            fs::set_permissions(shut.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let refused = adopt_folder(&window, shut.path().to_string_lossy().into_owned());
+        assert!(
+            refused.is_err(),
+            "a folder that cannot be listed is not opened"
+        );
+
+        // The window still has the folder it had, and the note in it is still
+        // one it may write.
+        assert!(
+            within_vault(&vault_of(&window), &note).is_ok(),
+            "the vault moved to a folder that could not be opened"
+        );
+        assert!(within_vault(&vault_of(&window), shut.path()).is_err());
+
+        // So that TempDir can clean itself up.
+        fs::set_permissions(shut.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
 }
 
 // ---------------------------------------------------------------------------

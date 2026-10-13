@@ -29,9 +29,24 @@ pub(crate) fn adopt_folder<R: tauri::Runtime>(
         return Err(format!("\"{}\" is not there any more", path));
     }
 
-    // The one place the boundary is set. Resolved here so that every later
-    // check is a comparison between two paths the OS has already agreed on.
+    // Resolved here so that every later check is a comparison between two
+    // paths the OS has already agreed on.
     let resolved = directory.canonicalize().map_err(|e| e.to_string())?;
+
+    // Read before anything is moved. This is the one step here that can fail
+    // for a folder that `is_dir` was happy with - a directory that can be
+    // entered but not listed, or one on a mount that stops answering - and
+    // everything below it is a change to the window that nothing undoes.
+    //
+    // Done the other way round, a switch that failed left the boundary on the
+    // folder that could not be read while the frontend went on showing the one
+    // it had: every open tab's autosave was then refused for being "outside
+    // the open folder", with the edits still in the editor and nothing on
+    // screen saying why.
+    let entries = list_one_folder(directory, &resolved, &resolved)?;
+
+    // Past here the window belongs to the new folder. The one place the
+    // boundary is set.
     {
         let vault = vault_of(window);
         *locked(&vault.root) = Some(resolved.clone());
@@ -54,7 +69,6 @@ pub(crate) fn adopt_folder<R: tauri::Runtime>(
     let announced = window.clone();
     index.build_in_background(generation, move || announce_files(&announced, true));
 
-    let entries = list_one_folder(directory, &resolved, &resolved)?;
     Ok(OpenedFolder { path, entries })
 }
 
