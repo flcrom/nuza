@@ -31,8 +31,12 @@ const ink = {
  * How wide the text column is allowed to get. Long lines are tiring to read,
  * so the column stops here and the rest of the window becomes margin - which is
  * what makes a maximised window feel calm rather than empty.
+ *
+ * In `em`, which on `.cm-content` is the editor's own text size: the column is
+ * a line length in characters, so zooming the text widens the column with it
+ * rather than fitting fewer words into the same strip.
  */
-const MEASURE = "var(--nuza-measure, 44rem)";
+const MEASURE = "var(--nuza-measure, 44em)";
 /** The space between lines of prose; set, like the measure, from Settings. */
 const LINE_HEIGHT = "var(--nuza-line-height, 1.75)";
 
