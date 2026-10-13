@@ -366,3 +366,38 @@ describe("readFolders", () => {
     expect(readFolders(tree)).toEqual(["/v/a", "/v/a/deep"]);
   });
 });
+
+// A notes drive on Windows, or `/` on a machine kept simple. `parentOf` spells
+// the root differently from the way the backend hands it over - `parentOf("C:\\a.md")`
+// is `"C:"`, not `"C:\\"` - so every one of these used to miss the root and
+// leave the tree untouched.
+describe("a vault at a drive or filesystem root", () => {
+  const drive = [{ name: "notes", path: "C:\\notes", isDirectory: true, children: [] }];
+  const slash = [{ name: "notes", path: "/notes", isDirectory: true, children: [] }];
+
+  test("takes a new file at the root", () => {
+    expect(addFile(drive, "C:\\", "C:\\a.md").map((e) => e.path)).toEqual(["C:\\notes", "C:\\a.md"]);
+    expect(addFile(slash, "/", "/a.md").map((e) => e.path)).toEqual(["/notes", "/a.md"]);
+  });
+
+  test("drops a file deleted from the root", () => {
+    const withFile = addFile(drive, "C:\\", "C:\\a.md");
+    expect(removeEntry(withFile, "C:\\", "C:\\a.md").map((e) => e.path)).toEqual(["C:\\notes"]);
+  });
+
+  test("adds a folder at the root", () => {
+    const entry = { name: "ideas", path: "C:\\ideas", isDirectory: true, children: [] };
+    expect(addEntry(drive, "C:\\", entry).map((e) => e.path)).toEqual(["C:\\ideas", "C:\\notes"]);
+  });
+
+  test("files a note into a folder of the root that the sidebar has not shown", () => {
+    const added = addFile(drive, "C:\\", "C:\\media\\shot.png");
+    const media = added.find((e) => e.path === "C:\\media");
+    expect(media?.children?.map((c) => c.path)).toEqual(["C:\\media\\shot.png"]);
+  });
+
+  test("still replaces the root's own children", () => {
+    const children = [{ name: "b.md", path: "/b.md", isDirectory: false }];
+    expect(setChildren(slash, "/", "/", children)).toEqual(children);
+  });
+});

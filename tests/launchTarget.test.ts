@@ -47,3 +47,22 @@ describe("planOpen", () => {
     expect(planOpen(moved, "/notes")).toEqual({ select: "/notes/sub/a.md" });
   });
 });
+
+// With a drive open as the vault, `nuza D:\notes\a.md` used to be read as a
+// note outside it and re-root the window onto `D:\notes`, putting away every
+// tab the session had.
+describe("a vault at a drive or filesystem root", () => {
+  test("a note in it is selected, not opened as its own folder", () => {
+    expect(planOpen({ kind: "file", path: "C:\\notes\\a.md" }, "C:\\")).toEqual({
+      select: "C:\\notes\\a.md",
+    });
+    expect(planOpen({ kind: "file", path: "/notes/a.md" }, "/")).toEqual({ select: "/notes/a.md" });
+  });
+
+  test("a note on another drive still brings its own folder", () => {
+    expect(planOpen({ kind: "file", path: "D:\\a.md" }, "C:\\")).toEqual({
+      folder: "D:",
+      focus: "D:\\a.md",
+    });
+  });
+});

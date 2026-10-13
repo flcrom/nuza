@@ -1,4 +1,5 @@
 import { FileEntry } from "./types";
+import { isWithin, samePath } from "./path";
 
 /**
  * The file tree, edited in place.
@@ -39,11 +40,6 @@ export function joinPath(parent: string, name: string) {
   return `${parent}${separatorFor(parent)}${name}`;
 }
 
-/** True if `path` is `ancestor` itself, or lives somewhere underneath it. */
-function isWithin(path: string, ancestor: string) {
-  return path === ancestor || path.startsWith(ancestor + "/") || path.startsWith(ancestor + "\\");
-}
-
 /** Directories first, then by name - the order the backend hands the tree over in. */
 function inOrder(entries: FileEntry[]) {
   return entries.slice().sort((a, b) => {
@@ -78,7 +74,7 @@ function updateDirectory(
  * for the first time, or opened again to look for what it could not answer for.
  */
 export function setChildren(tree: FileEntry[], rootPath: string, path: string, children: FileEntry[]) {
-  if (path === rootPath) return children;
+  if (samePath(path, rootPath)) return children;
   const update = (nodes: FileEntry[]): FileEntry[] =>
     nodes.map((node) => {
       if (!node.isDirectory || !isWithin(path, node.path)) return node;
@@ -167,14 +163,14 @@ export function findEntry(nodes: FileEntry[], path: string): FileEntry | null {
 export function addEntry(tree: FileEntry[], rootPath: string, entry: FileEntry): FileEntry[] {
   const parent = parentOf(entry.path);
   const insert = (children: FileEntry[]) => inOrder([...children, entry]);
-  return parent === rootPath ? insert(tree) : updateDirectory(tree, parent, insert);
+  return samePath(parent, rootPath) ? insert(tree) : updateDirectory(tree, parent, insert);
 }
 
 /** Drops the entry at `path`, and everything underneath it, from the tree. */
 export function removeEntry(tree: FileEntry[], rootPath: string, path: string): FileEntry[] {
   const parent = parentOf(path);
   const drop = (children: FileEntry[]) => children.filter((child) => child.path !== path);
-  return parent === rootPath ? drop(tree) : updateDirectory(tree, parent, drop);
+  return samePath(parent, rootPath) ? drop(tree) : updateDirectory(tree, parent, drop);
 }
 
 /** Rewrites an entry's own path, and its descendants', after it has moved. */
@@ -202,10 +198,10 @@ export function moveEntry(tree: FileEntry[], rootPath: string, path: string, new
  * the first paste.
  */
 export function ensureDirectory(tree: FileEntry[], rootPath: string, path: string): FileEntry[] {
-  if (!path || path === rootPath || findEntry(tree, path)) return tree;
+  if (!path || samePath(path, rootPath) || findEntry(tree, path)) return tree;
 
   const parent = parentOf(path);
-  const withParent = parent && parent !== rootPath ? ensureDirectory(tree, rootPath, parent) : tree;
+  const withParent = parent && !samePath(parent, rootPath) ? ensureDirectory(tree, rootPath, parent) : tree;
   return addEntry(withParent, rootPath, { name: nameOf(path), path, isDirectory: true, children: [] });
 }
 
@@ -270,5 +266,5 @@ export function touchEntry(tree: FileEntry[], rootPath: string, path: string, at
   const parent = parentOf(path);
   const touch = (children: FileEntry[]) =>
     children.map((child) => (child.path === path ? { ...child, modified: at } : child));
-  return parent === rootPath ? touch(tree) : updateDirectory(tree, parent, touch);
+  return samePath(parent, rootPath) ? touch(tree) : updateDirectory(tree, parent, touch);
 }
