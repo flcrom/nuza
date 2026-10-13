@@ -203,11 +203,25 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     return () => window.removeEventListener(ATTACHMENT_EVENT, onAttachment);
   }, []);
 
+  /**
+   * The conflicted notes, readable outside a render - by the autosave, which
+   * leaves them alone, and by `clearConflict`, which has to know whether there
+   * was a conflict at all before it throws anything away.
+   */
+  const conflictsRef = useRef(conflicts);
+  conflictsRef.current = conflicts;
+
   const flagConflict = useCallback((path: string) => {
     setConflicts((paths) => (paths.has(path) ? paths : new Set(paths).add(path)));
   }, []);
 
   const clearConflict = useCallback((path: string) => {
+    // Asked before the set is changed, because what happens next depends on
+    // whether there was a question outstanding - and `writeDocument` calls
+    // this after every save, conflict or no conflict.
+    const answered = conflictsRef.current.has(path);
+    if (!answered) return;
+
     setConflicts((paths) => {
       if (!paths.has(path)) return paths;
       const next = new Set(paths);
@@ -215,6 +229,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       return next;
     });
     // The question has been answered, so there is nothing left to hold on to.
+    //
+    // Only here. Dropped on every save instead, this deleted the edits kept
+    // from a previous run the moment the note was typed in - while the bar
+    // offering to restore them was still on screen, and leaving nothing for
+    // the next run to offer.
     void invoke("drop_recovery", { path }).catch(() => {});
   }, []);
 
@@ -569,9 +588,6 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * left out: it has no path yet, and saving it would mean putting a dialog
    * in front of someone who only meant to type.
    */
-  const conflictsRef = useRef(conflicts);
-  conflictsRef.current = conflicts;
-
   const saveDirty = useCallback(async () => {
     const paths = Array.from(dirtyPathsRef.current).filter(
       // A note waiting on an answer is left exactly as it is, on both sides:
