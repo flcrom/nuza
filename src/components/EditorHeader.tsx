@@ -16,6 +16,8 @@ interface EditorHeaderProps {
   onCloseTab: (path: string) => void;
   onReorderTabs: (path: string, before: number) => void;
   onTabMenu: (path: string, x: number, y: number) => void;
+  /** A tab let go of outside the window: it leaves for a window of its own. */
+  onTearOffTab: (path: string, frame: { x: number; y: number; width: number; height: number }) => void;
   onCheckUpdates: () => void;
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
@@ -134,6 +136,7 @@ function EditorHeader({
   onCloseTab,
   onReorderTabs,
   onTabMenu,
+  onTearOffTab,
   onCheckUpdates,
   onInstallUpdate,
   onOpenSettings,
@@ -157,6 +160,7 @@ function EditorHeader({
         onClose={onCloseTab}
         onReorder={onReorderTabs}
         onMenu={onTabMenu}
+        onTearOff={onTearOffTab}
       />
 
       <div className="ml-auto flex shrink-0 items-center gap-3">

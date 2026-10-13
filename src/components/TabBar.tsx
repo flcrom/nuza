@@ -1,5 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { tabLabels } from "@/lib/tabLabels";
+import {
+  TAB_DRAG_TYPE,
+  beginTabDrag,
+  endTabDrag,
+  releasedOutside,
+  takeTabDrag,
+  tornOffFrame,
+  wasTabDragTaken,
+  windowFrame,
+} from "@/lib/tabDrag";
 import { X } from "lucide-react";
 
 /** Width of the fade at each end of the strip when there's more to scroll to. */
@@ -17,14 +27,12 @@ interface TabBarProps {
   onReorder: (path: string, before: number) => void;
   /** Asks for the tab's own menu, at a point on screen. */
   onMenu?: (path: string, x: number, y: number) => void;
+  /**
+   * The tab was let go of outside the window: it leaves this one for a window
+   * of its own, at `frame`.
+   */
+  onTearOff?: (path: string, frame: { x: number; y: number; width: number; height: number }) => void;
 }
-
-/**
- * The type a dragged tab is carried as. Its own, rather than text, so a tab
- * let go of over the note or the sidebar is nothing to them - neither writes
- * its path into the note nor tries to move a file.
- */
-const TAB_TYPE = "application/x-nuza-tab";
 
 function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path;
@@ -53,6 +61,7 @@ function TabBar({
   onClose,
   onReorder,
   onMenu,
+  onTearOff,
 }: TabBarProps) {
   const labels = useMemo(() => tabLabels(paths), [paths]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -140,13 +149,24 @@ function TabBar({
             title={isMissing ? `${path}\nNo longer on disk` : path}
             draggable
             onDragStart={(event) => {
-              event.dataTransfer.setData(TAB_TYPE, path);
+              event.dataTransfer.setData(TAB_DRAG_TYPE, path);
               event.dataTransfer.effectAllowed = "move";
+              beginTabDrag(path);
               setDragged(path);
             }}
-            onDragEnd={endDrag}
+            onDragEnd={(event) => {
+              // Nothing in the app took it and it was let go of past the edge
+              // of the window: that is the tab being torn off, rather than a
+              // drag that was cancelled or declined.
+              if (onTearOff && !wasTabDragTaken()) {
+                const frame = windowFrame();
+                if (releasedOutside(event, frame)) onTearOff(path, tornOffFrame(event, frame));
+              }
+              endTabDrag();
+              endDrag();
+            }}
             onDragOver={(event) => {
-              if (!event.dataTransfer.types.includes(TAB_TYPE)) return;
+              if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
               // Which half of the tab the pointer is over decides the side.
@@ -154,9 +174,10 @@ function TabBar({
               setDropBefore(event.clientX < rect.left + rect.width / 2 ? index : index + 1);
             }}
             onDrop={(event) => {
-              const moving = event.dataTransfer.getData(TAB_TYPE);
+              const moving = event.dataTransfer.getData(TAB_DRAG_TYPE);
               if (!moving || dropBefore === null) return;
               event.preventDefault();
+              takeTabDrag();
               onReorder(moving, dropBefore);
               endDrag();
             }}

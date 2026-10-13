@@ -405,11 +405,17 @@ pub(crate) fn note_window_target(
 ///
 /// Opened directly rather than through `route`, which would only bring this
 /// window forward - it already has the vault open, and that is the point.
+///
+/// `frame` is where the window should go, for a tab that was torn off and let
+/// go of somewhere in particular. Without one the window cascades from this
+/// one, which is what the menu item wants; a frame that no screen can show is
+/// discarded by `open_window` and cascades as well.
 #[tauri::command]
 pub(crate) async fn open_note_in_new_window(
     window: tauri::WebviewWindow,
     path: String,
     vault: String,
+    frame: Option<Frame>,
 ) -> Result<(), String> {
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -417,7 +423,7 @@ pub(crate) async fn open_note_in_new_window(
         let resolved = crate::state::within_vault(&held, Path::new(&path))?;
         let root = locked(&held.root).clone();
         let target = note_window_target(&resolved, root.as_deref(), &path, &vault)?;
-        open_window(&app, Some(target), None).map(|_| ())
+        open_window(&app, Some(target), frame).map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
