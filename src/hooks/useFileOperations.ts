@@ -211,6 +211,10 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const conflictsRef = useRef(conflicts);
   conflictsRef.current = conflicts;
 
+  /** The same, for the notes with edits kept from a previous run. */
+  const recoveredRef = useRef(recovered);
+  recoveredRef.current = recovered;
+
   const flagConflict = useCallback((path: string) => {
     setConflicts((paths) => (paths.has(path) ? paths : new Set(paths).add(path)));
   }, []);
@@ -1472,6 +1476,25 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       setMissing((paths) =>
         paths.size === 0 ? paths : new Set(Array.from(paths).filter((gone) => !isWithin(gone, path)))
       );
+
+      // Both questions about a deleted note are moot, and the edits kept for
+      // them are not waiting for anybody. Read from the two sets rather than
+      // from the tabs: a conflicted note need not have one, and deleting a
+      // folder takes everything underneath it.
+      //
+      // Left behind, the flag made a note of the same name - remade later, or
+      // restored from the Trash - start out refusing to autosave with no bar
+      // to say why, and the kept buffer sat in the app's data directory for
+      // the sixty days `prune_kept` waits, to be offered to whatever took the
+      // path next.
+      const settled = new Set(
+        [...conflictsRef.current, ...recoveredRef.current.keys()].filter((kept) => isWithin(kept, path))
+      );
+      if (settled.size > 0) {
+        setConflicts((paths) => new Set(Array.from(paths).filter((p) => !settled.has(p))));
+        setRecovered((kept) => new Map(Array.from(kept).filter(([p]) => !settled.has(p))));
+        for (const gone of settled) void invoke("drop_recovery", { path: gone }).catch(() => {});
+      }
 
       const remaining = openPathsRef.current.filter((p) => !isWithin(p, path));
       recentRef.current = recentRef.current.filter((p) => !isWithin(p, path));
