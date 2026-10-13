@@ -38,6 +38,18 @@ import { useFileIndex } from "./useFileIndex";
 /** The scratch note: the one document with no file behind it. */
 export const UNTITLED_FILE = "untitled.md";
 
+/**
+ * Where a new window should be put, in logical pixels - `Frame` in
+ * `src-tauri/src/multiwindow.rs`, which checks it against the screens that
+ * are there and cascades instead if it cannot be reached.
+ */
+export interface WindowFrameRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Announced by the backend when a note changes underneath the app. */
 const FILE_CHANGED_EVENT = "file-changed";
 /** Announced by the backend when the set of files in the vault changes. */
@@ -1088,17 +1100,19 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * disk, and would otherwise open on the copy from before the last pause.
    */
   const openInNewWindow = useCallback(
-    async (path: string, move = false) => {
+    async (path: string, move = false, frame?: WindowFrameRect) => {
       const root = rootPathRef.current;
       if (!root || path === UNTITLED_FILE) return;
 
       try {
         if (dirtyPathsRef.current.has(path) && !conflictsRef.current.has(path)) await writeDocument(path);
-        await invoke("open_note_in_new_window", { path, vault: root });
+        await invoke("open_note_in_new_window", { path, vault: root, frame: frame ?? null });
       } catch (error) {
         report(`Couldn't open "${fileNameOf(path)}" in a new window`, error);
         return;
       }
+      // Only once the other window has it: a window that could not be opened
+      // should leave the note where it was rather than nowhere.
       if (move) closeFile(path);
     },
     [writeDocument, closeFile]

@@ -12,6 +12,7 @@ import SettingsPalette from "./components/SettingsPalette";
 import ChangedOnDisk from "./components/ChangedOnDisk";
 import RecoveredEdits from "./components/RecoveredEdits";
 import SidePane from "./components/SidePane";
+import SplitDropZone from "./components/SplitDropZone";
 import Notices from "./components/Notices";
 import ContextMenu from "./components/Sidebar/ContextMenu";
 import { useKeymaps, useKeymapListener } from "./hooks/useKeymaps";
@@ -426,6 +427,18 @@ function App() {
     [linkView, editorView, sideView, sideFile, rootPath, fileIndex.notes, currentFile]
   );
 
+  /**
+   * A tab let go of outside the window: that note leaves this window for one
+   * of its own, on the same vault, where it was dropped. The same thing "Move
+   * to New Window" in the tab's menu does, by the gesture people reach for.
+   */
+  const tearOffTab = useCallback(
+    (path: string, frame: { x: number; y: number; width: number; height: number }) => {
+      void openInNewWindow(path, true, frame);
+    },
+    [openInNewWindow]
+  );
+
   /** Where a tab's own menu is open, and for which tab. */
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const openTabMenu = useCallback((path: string, x: number, y: number) => setTabMenu({ x, y, path }), []);
@@ -806,6 +819,7 @@ function App() {
             onCloseTab={closeFile}
             onReorderTabs={reorderTabs}
             onTabMenu={openTabMenu}
+            onTearOffTab={tearOffTab}
             onCheckUpdates={checkForUpdates}
             onInstallUpdate={installUpdate}
             onOpenSettings={openSettings}
@@ -851,6 +865,13 @@ function App() {
               ref={editorContainer}
               onContextMenu={(event) => openEditorMenu(event, editorView)}
               className="flex-1 min-h-0 print:h-auto"
+            />
+            {/* Only up while a tab is being dragged, so there is nothing
+                between the pointer and the text the rest of the time. */}
+            <SplitDropZone
+              activePath={currentFile}
+              hasSplit={!!sideFile}
+              onDrop={(path) => void openToSide(path)}
             />
             {sectionGuides && !zen && <SectionGuides outline={outline} onJump={onJumpToHeading} />}
             <GettingStarted

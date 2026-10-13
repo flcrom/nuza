@@ -31,11 +31,16 @@ export function clampEditorFontSize(size: number) {
 }
 
 /**
- * How wide the text column may get, in pixels. Long lines are tiring to read,
- * so the column stops somewhere and the rest of the window is margin - but
- * where it stops is a matter of the screen, the font and the reader. The top
- * of the range is wider than most windows, which is to say "as wide as the
- * pane".
+ * How wide the text column may get, in pixels at the default text size. Long
+ * lines are tiring to read, so the column stops somewhere and the rest of the
+ * window is margin - but where it stops is a matter of the screen, the font
+ * and the reader. The top of the range is wider than most windows, which is to
+ * say "as wide as the pane".
+ *
+ * "At the default text size" because the column is laid out in `em` (see
+ * `applyTypography`): what this setting really chooses is a line length in
+ * characters, and zooming keeps that length while changing how big the
+ * characters are.
  */
 export const DEFAULT_CONTENT_WIDTH = 704;
 export const MIN_CONTENT_WIDTH = 480;
@@ -68,12 +73,32 @@ export interface Typography {
 }
 
 /**
+ * The measure as the stylesheet wants it: `em`, not `px`.
+ *
+ * The variable is read by `.cm-content`, whose font size is the editor's own,
+ * so an `em` measure is a line length in characters and the column grows and
+ * shrinks with the text. In pixels it did not: zooming in with `mod+=` made
+ * every word bigger and left the column exactly where it was, so each step fit
+ * fewer words on a line until a paragraph was a ragged stack of four or five.
+ *
+ * `DEFAULT_EDITOR_FONT_SIZE` is the divisor because that is the size the
+ * setting is written in - 704px at 16px text is 44em, the width the column has
+ * always had.
+ */
+export function measureEm(contentWidth: number) {
+  const em = clampContentWidth(contentWidth) / DEFAULT_EDITOR_FONT_SIZE;
+  // Three places is finer than any screen can show, and keeps a width that has
+  // been through storage from coming back as 43.999999999999996em.
+  return Number(em.toFixed(3));
+}
+
+/**
  * Hands the measurements to the stylesheet, where the editor's theme reads
  * them. Set on the root rather than through the editor's own configuration,
  * so dragging a slider restyles the page without the editor being rebuilt.
  */
 export function applyTypography(root: HTMLElement, { contentWidth, lineHeight }: Typography) {
-  root.style.setProperty("--nuza-measure", `${clampContentWidth(contentWidth)}px`);
+  root.style.setProperty("--nuza-measure", `${measureEm(contentWidth)}em`);
   root.style.setProperty("--nuza-line-height", String(clampLineHeight(lineHeight)));
 }
 

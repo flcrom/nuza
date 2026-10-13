@@ -198,7 +198,7 @@ export default function AppearanceSettings({
 
       <SettingRow
         title="Text Width"
-        description="How wide the column of text may get before the rest is margin"
+        description="How wide the column of text may get before the rest is margin, at the size above - zooming scales it with the text"
       >
         <div className="flex w-40 items-center gap-3">
           <input
