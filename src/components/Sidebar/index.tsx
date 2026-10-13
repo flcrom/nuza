@@ -13,6 +13,7 @@ import { report } from "@/lib/notices";
 import { revealLabel } from "@/lib/platform";
 import { FileEntry } from "@/lib/types";
 import { SORT_ORDERS, SortOrder, parentOf, sortTree } from "@/lib/fileTree";
+import { samePath } from "@/lib/path";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
@@ -365,7 +366,14 @@ function Sidebar({
 
   const moveEntry = useCallback(
     async (path: string, targetDir: string) => {
-      if (path === targetDir) return;
+      // Already where it is being put: the row let go of on itself, or a note
+      // let go of over the folder it is in - including the root row, for one
+      // that is already at the top of the vault. Neither is a mistake, and
+      // the second was being reported as one: the backend resolves the
+      // destination to the file's own path, finds it occupied and refuses with
+      // "already exists in destination", which is the right answer to a
+      // question nobody meant to ask.
+      if (samePath(path, targetDir) || samePath(parentOf(path), targetDir)) return;
       try {
         await onMove(path, targetDir);
       } catch (error) {
