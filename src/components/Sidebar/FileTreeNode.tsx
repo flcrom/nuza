@@ -111,14 +111,28 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
   /** A folder takes the files itself; a file hands them to the folder it is in. */
   const dropTarget = entry.isDirectory ? entry.path : parentOf(entry.path);
 
-  function handleDragOver(e: React.DragEvent) {
-    const external = carriesFiles(e);
+  /**
+   * Whether this row would do anything with what is being dragged over it.
+   *
+   * Files from outside go to `dropTarget`, so any row takes them - a folder
+   * into itself, a file into the folder it is in. A row dragged from the tree
+   * only moves into a folder, so a file row has nothing to offer it: the drop
+   * handler has always known that, and the drag-over handler did not, which
+   * left a note dragged over another note lit up and showing a move cursor for
+   * a drop that then did nothing at all.
+   */
+  function wouldTake(e: React.DragEvent) {
+    if (carriesFiles(e)) return true;
     const dragging = draggedPath();
-    if (!external && (!dragging || dragging === entry.path)) return;
+    return !!dragging && dragging !== entry.path && entry.isDirectory;
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!wouldTake(e)) return;
     e.preventDefault();
     e.stopPropagation();
     // Copying something in from outside, moving something already in the vault.
-    e.dataTransfer.dropEffect = external ? "copy" : "move";
+    e.dataTransfer.dropEffect = carriesFiles(e) ? "copy" : "move";
     setDragOver(entry.path);
   }
 
