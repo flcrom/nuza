@@ -1011,6 +1011,32 @@ fn refuses_a_dropped_name_with_nothing_usable_left() {
     assert!(safe_file_name(":?*").is_err());
 }
 
+/// A typed name that would be hidden is turned down for the reason it is
+/// turned down. The tree leaves hidden files out - see `is_ignored` - so one
+/// made here would never appear, which reads as a creation that failed; but
+/// "is not a name a file can have" is not true of `.env`, and was what it
+/// used to be told.
+#[test]
+fn says_why_a_hidden_name_is_turned_down() {
+    for name in [".env", ".gitignore", ".a.md"] {
+        let refused = exact_file_name(name).unwrap_err();
+        assert!(
+            refused.contains("hidden"),
+            "{name} was turned down with {refused:?}"
+        );
+    }
+}
+
+/// Dots on their own are still nothing to name a file, and are still refused
+/// as that rather than as something hidden.
+#[test]
+fn a_name_of_nothing_but_dots_is_still_invalid() {
+    for name in [".", "..", "..."] {
+        assert!(exact_file_name(name).is_err());
+        assert!(safe_file_name(name).is_err());
+    }
+}
+
 /// Reserved whatever is put after them: Win32 reads the stem, so `aux.md`
 /// is the printer port and not a note.
 #[test]
