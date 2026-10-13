@@ -141,10 +141,37 @@ export function firesWhileTyping(binding: string): boolean {
   return parts.includes("mod") || parts.includes("ctrl");
 }
 
+/** The modifiers a binding may carry, in the order a binding writes them. */
+const MODIFIER_ORDER = ["mod", "ctrl", "alt", "shift"];
+
+/**
+ * The chord a binding actually is on this platform: two bindings give the same
+ * string here exactly when they are the same keystroke.
+ *
+ * Off macOS `mod` *is* Control - `matchesBinding` says so - which makes
+ * "mod+x" and "ctrl+x" one chord written two ways. Compared as written, they
+ * looked like different shortcuts: Settings said nothing about the clash, and
+ * the listener returns on the first action it matches, so the other quietly
+ * stopped working. On macOS the two are genuinely separate keys and are left
+ * alone.
+ */
+export function chordOf(binding: string, isMac: boolean = isMacPlatform()): string {
+  if (!binding) return "";
+
+  const parts = binding.split("+");
+  const key = parts[parts.length - 1];
+  const held = new Set(parts.slice(0, -1));
+  if (!isMac && held.delete("ctrl")) held.add("mod");
+
+  return [...MODIFIER_ORDER.filter((modifier) => held.has(modifier)), key].join("+");
+}
+
 export function formatBinding(binding: string, isMac: boolean = isMacPlatform()): string {
   if (!binding) return "";
 
-  return binding
+  // Through the chord, so that off macOS a binding carrying both `mod` and
+  // `ctrl` is drawn as the one key it presses rather than as "Ctrl+Ctrl+X".
+  return chordOf(binding, isMac)
     .split("+")
     .map((part) => {
       switch (part) {

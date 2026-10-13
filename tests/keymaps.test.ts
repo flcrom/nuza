@@ -45,4 +45,39 @@ describe("conflictingActions", () => {
 
     expect(conflictingActions(bindings).size).toBe(0);
   });
+
+  // Off macOS `mod` is Control, so these are one keystroke written two ways.
+  // Compared as written they looked like different shortcuts, and the one the
+  // listener reached second simply stopped working with nothing said about it.
+  describe("mod and ctrl, which are one key off macOS", () => {
+    function twoSpellings() {
+      const bindings = defaults();
+      bindings["save-file"] = "mod+j";
+      bindings["toggle-sidebar"] = "ctrl+j";
+      return bindings;
+    }
+
+    test("clash on Windows and Linux", () => {
+      const clashing = conflictingActions(twoSpellings(), false);
+      expect(clashing).toEqual(new Set(["save-file", "toggle-sidebar"]));
+    });
+
+    test("do not clash on macOS, where they are separate keys", () => {
+      expect(conflictingActions(twoSpellings(), true).size).toBe(0);
+    });
+
+    test("a binding carrying both is the same chord as one carrying mod alone", () => {
+      const bindings = defaults();
+      bindings["save-file"] = "mod+ctrl+j";
+      bindings["toggle-sidebar"] = "mod+j";
+
+      expect(conflictingActions(bindings, false).size).toBe(2);
+      expect(conflictingActions(bindings, true).size).toBe(0);
+    });
+
+    test("the defaults still clash with nothing on either platform", () => {
+      expect(conflictingActions(defaults(), false).size).toBe(0);
+      expect(conflictingActions(defaults(), true).size).toBe(0);
+    });
+  });
 });

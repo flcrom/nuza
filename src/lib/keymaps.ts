@@ -1,3 +1,5 @@
+import { chordOf } from "@/lib/keybinding";
+
 export type KeymapAction =
   | "toggle-sidebar"
   | "save-file"
@@ -314,14 +316,23 @@ export const KEYMAP_STORAGE_KEY = "nuza:keymap-overrides";
  * Two actions can be given the same chord, and the listener returns on the
  * first one it matches - so the loser simply stops working, with nothing on
  * screen to say why. Settings shows this beside both of them.
+ *
+ * Compared as the chord each binding presses rather than as the string it is
+ * written with: off macOS `mod` is Control, so "mod+x" and "ctrl+x" are the
+ * same keystroke spelled two ways, and comparing the spellings missed exactly
+ * the clash this exists to report.
  */
-export function conflictingActions(bindings: Partial<Record<KeymapAction, string>>): Set<KeymapAction> {
+export function conflictingActions(
+  bindings: Partial<Record<KeymapAction, string>>,
+  isMac?: boolean
+): Set<KeymapAction> {
   const seen = new Map<string, KeymapAction[]>();
 
   for (const action of KEYMAP_ACTIONS) {
     const binding = bindings[action.id];
     if (!binding) continue;
-    seen.set(binding, [...(seen.get(binding) ?? []), action.id]);
+    const chord = chordOf(binding, isMac);
+    seen.set(chord, [...(seen.get(chord) ?? []), action.id]);
   }
 
   const clashing = new Set<KeymapAction>();
