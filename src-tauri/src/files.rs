@@ -788,6 +788,15 @@ fn write_through_a_temporary(path: &Path, bytes: &[u8], private: bool) -> Result
 
     // A note that is already there keeps the permissions it has, whatever a
     // new file would have been given.
+    //
+    // Only the permissions. Replacing the file rather than writing through it
+    // is what makes the write atomic, and the cost is that the note is a new
+    // inode afterwards: a hard link to it stops following, and extended
+    // attributes - Finder tags and comments on macOS, alternate data streams
+    // on Windows - do not come across. That is accepted rather than overlooked.
+    // Carrying them would mean reading and rewriting every attribute on every
+    // autosave, and the hard-link case cannot be had at all without giving up
+    // the atomicity, which is worth more than either.
     if let Ok(existing) = fs::metadata(path) {
         let _ = file.as_file().set_permissions(existing.permissions());
     }
@@ -797,6 +806,23 @@ fn write_through_a_temporary(path: &Path, bytes: &[u8], private: bool) -> Result
     // recorded after it means the contents reached the disk as well.
     file.as_file().sync_all().map_err(plainly)?;
     file.persist(path).map_err(plainly)?;
+
+    // The bytes are on the disk and the rename has happened - but a rename is
+    // a change to the *directory*, and nothing has flushed that. Lose power
+    // here and the note's new contents are safe while the directory still
+    // points at the old ones: "atomic" is a statement about what a reader can
+    // see, not about what survives. Autosave runs several times a minute per
+    // open note, so it is a gap that comes round often.
+    //
+    // Best effort, and deliberately not `?`: a filesystem that will not sync a
+    // directory handle is no reason to tell somebody their note did not save,
+    // when it did. Unix only - Windows will not open a directory as a file
+    // without `FILE_FLAG_BACKUP_SEMANTICS`, and NTFS records the rename in its
+    // own log rather than leaving it to the caller.
+    #[cfg(unix)]
+    if let Ok(opened) = fs::File::open(directory) {
+        let _ = opened.sync_all();
+    }
 
     Ok(())
 }
