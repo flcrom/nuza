@@ -162,7 +162,8 @@ fn escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-#[cfg(test)]
+// Unix paths throughout, as Seatbelt's are.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
