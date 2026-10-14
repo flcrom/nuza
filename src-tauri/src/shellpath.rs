@@ -29,7 +29,7 @@ const PATIENCE: Duration = Duration::from_secs(3);
 static MERGED: OnceLock<OsString> = OnceLock::new();
 
 /// The `PATH` to start an agent with: the app's own, with what the login
-/// shell adds after it. Blocks for up to [`PATIENCE`] the first time it is
+/// shell adds after it. Blocks for up to three seconds the first time it is
 /// called; call it off the async runtime's threads.
 pub(crate) fn path() -> OsString {
     MERGED

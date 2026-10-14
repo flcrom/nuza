@@ -47,6 +47,31 @@ pub(crate) struct Inbound {
 
 pub(crate) type InboundSender = mpsc::UnboundedSender<Inbound>;
 
+/// Decides which of the agent's permission requests are allowed. Everything
+/// is refused unless a gate says otherwise, and no gate is asked about
+/// anything but a permission: the file system and the terminal are not
+/// offered at all.
+pub(crate) trait Gate: Send + Sync {
+    /// Sees each `session/update` before it is passed on. The permission for
+    /// a tool call names the call by id alone; what it is a call *to* is only
+    /// said in the update that announced it.
+    fn saw(&self, _update: &Value) {}
+
+    /// Whether this permission request may be allowed, once.
+    fn allows(&self, request: &Value) -> bool;
+}
+
+/// The gate that allows nothing.
+#[cfg(test)]
+pub(crate) struct RefuseAll;
+
+#[cfg(test)]
+impl Gate for RefuseAll {
+    fn allows(&self, _: &Value) -> bool {
+        false
+    }
+}
+
 type Reply = Result<Value, String>;
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Reply>>>>;
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
@@ -61,8 +86,13 @@ pub(crate) struct RpcClient {
 
 impl RpcClient {
     /// Starts `command` and listens to it. Notifications, and the requests
-    /// the agent makes of us once they have been answered, go to `inbound`.
-    pub(crate) fn spawn(mut command: Command, inbound: InboundSender) -> std::io::Result<Self> {
+    /// the agent makes of us once they have been refused, go to `inbound`.
+    /// `gate` says which permissions are not refused.
+    pub(crate) fn spawn(
+        mut command: Command,
+        inbound: InboundSender,
+        gate: Arc<dyn Gate>,
+    ) -> std::io::Result<Self> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -90,6 +120,7 @@ impl RpcClient {
             Arc::clone(&pending),
             Arc::clone(&stdin),
             inbound,
+            gate,
             tail,
         );
 
@@ -129,6 +160,15 @@ impl RpcClient {
     /// Whether the agent has already exited.
     pub(crate) async fn has_exited(&self) -> bool {
         matches!(self.child.lock().await.try_wait(), Ok(Some(_)))
+    }
+
+    /// Stops the agent and everything it started, without waiting - for an
+    /// app on its way out, which has no time to.
+    pub(crate) fn kill_now(&self) {
+        if let Ok(mut child) = self.child.try_lock() {
+            kill_group(&mut child);
+            let _ = child.start_kill();
+        }
     }
 
     /// Stops the agent, and everything it started.
@@ -181,6 +221,7 @@ fn read_stdout(
     pending: Pending,
     stdin: Arc<AsyncMutex<ChildStdin>>,
     inbound: InboundSender,
+    gate: Arc<dyn Gate>,
     tail: StderrTail,
 ) {
     tokio::spawn(async move {
@@ -204,17 +245,24 @@ fn read_stdout(
                     // because an agent waiting on a reply that never comes
                     // looks exactly like a model that has hung.
                     let params = message.get("params").cloned().unwrap_or(Value::Null);
-                    let reply = reply_to_agent(method, id.clone());
+                    let (reply, allowed) = reply_to_agent(method, id.clone(), &params, &*gate);
                     if let Err(error) = write_line(&stdin, &reply).await {
                         log::warn!("could not answer the agent's {method}: {error}");
                     }
-                    let _ = inbound.send(Inbound {
-                        method: method.to_string(),
-                        params,
-                    });
+                    // What was allowed is not news. What was refused is passed
+                    // on, so it can be said rather than silently not happen.
+                    if !allowed {
+                        let _ = inbound.send(Inbound {
+                            method: method.to_string(),
+                            params,
+                        });
+                    }
                 }
                 (None, Some(method)) => {
                     let params = message.get("params").cloned().unwrap_or(Value::Null);
+                    if method == "session/update" {
+                        gate.saw(&params);
+                    }
                     let _ = inbound.send(Inbound {
                         method: method.to_string(),
                         params,
@@ -261,25 +309,55 @@ pub(crate) fn error_text(error: &Value) -> String {
     }
 }
 
-/// The answer to a request from the agent.
+/// The answer to a request from the agent, and whether it was a yes.
 ///
 /// nuza offers the agent nothing to ask for: no file system and no terminal
 /// are advertised at `initialize`, so anything but a permission request is a
-/// method nuza does not have. And every permission is refused - the agent may
-/// only talk. The id is echoed back exactly as it came, whatever its type.
-pub(crate) fn reply_to_agent(method: &str, id: Value) -> Value {
-    if method == "session/request_permission" {
-        return json!({
+/// method nuza does not have. A permission is refused unless `gate` allows it
+/// and the agent offered a way to allow it just this once - never "always".
+/// The id is echoed back exactly as it came, whatever its type.
+pub(crate) fn reply_to_agent(
+    method: &str,
+    id: Value,
+    params: &Value,
+    gate: &dyn Gate,
+) -> (Value, bool) {
+    if method != "session/request_permission" {
+        let reply = json!({
             "jsonrpc": "2.0",
             "id": id,
-            "result": { "outcome": { "outcome": "cancelled" } },
+            "error": { "code": METHOD_NOT_FOUND, "message": format!("method not supported: {method}") },
         });
+        return (reply, false);
     }
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": METHOD_NOT_FOUND, "message": format!("method not supported: {method}") },
-    })
+    let allow_once = gate
+        .allows(params)
+        .then(|| params.get("options")?.as_array())
+        .flatten()
+        .and_then(|options| {
+            options
+                .iter()
+                .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_once"))
+        })
+        .and_then(|option| option.get("optionId").cloned());
+    match allow_once {
+        Some(option) => (
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "selected", "optionId": option } },
+            }),
+            true,
+        ),
+        None => (
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "cancelled" } },
+            }),
+            false,
+        ),
+    }
 }
 
 fn read_stderr(stderr: ChildStderr, tail: StderrTail) {
@@ -365,22 +443,67 @@ mod tests {
         assert_eq!(error_text(&bare), r#"{"code":1}"#);
     }
 
+    struct AllowAll;
+    impl Gate for AllowAll {
+        fn allows(&self, _: &Value) -> bool {
+            true
+        }
+    }
+
+    fn asking() -> Value {
+        json!({ "toolCall": { "toolCallId": "c1" }, "options": [
+            { "optionId": "always", "kind": "allow_always" },
+            { "optionId": "once", "kind": "allow_once" },
+            { "optionId": "no", "kind": "reject_once" },
+        ]})
+    }
+
     #[test]
     fn every_permission_is_refused_and_the_id_comes_back_as_it_was_sent() {
         // Real agents number their own requests from 0, and some use strings.
         for id in [json!(0), json!("agent-7")] {
-            let reply = reply_to_agent("session/request_permission", id.clone());
+            let (reply, allowed) = reply_to_agent(
+                "session/request_permission",
+                id.clone(),
+                &asking(),
+                &RefuseAll,
+            );
             assert_eq!(reply["id"], id);
             assert_eq!(reply["result"]["outcome"]["outcome"], "cancelled");
+            assert!(!allowed);
         }
+    }
+
+    #[test]
+    fn an_allowed_permission_is_allowed_once_and_never_always() {
+        let (reply, allowed) =
+            reply_to_agent("session/request_permission", json!(1), &asking(), &AllowAll);
+        assert!(allowed);
+        assert_eq!(
+            reply["result"]["outcome"],
+            json!({ "outcome": "selected", "optionId": "once" })
+        );
+
+        // With no way to allow it just once, it is not allowed at all.
+        let only_always = json!({ "options": [{ "optionId": "always", "kind": "allow_always" }] });
+        let (reply, allowed) = reply_to_agent(
+            "session/request_permission",
+            json!(1),
+            &only_always,
+            &AllowAll,
+        );
+        assert!(!allowed);
+        assert_eq!(reply["result"]["outcome"]["outcome"], "cancelled");
     }
 
     #[test]
     fn anything_else_the_agent_asks_for_is_not_a_method_nuza_has() {
         for method in ["fs/read_text_file", "fs/write_text_file", "terminal/create"] {
-            let reply = reply_to_agent(method, json!(3));
+            // Not even a gate that allows everything opens these.
+            let (reply, allowed) = reply_to_agent(method, json!(3), &json!({}), &AllowAll);
             assert_eq!(reply["error"]["code"], METHOD_NOT_FOUND);
             assert!(reply.get("result").is_none());
+            assert!(!allowed);
         }
     }
 }

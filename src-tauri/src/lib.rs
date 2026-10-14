@@ -12,8 +12,6 @@ mod menu;
 mod multiwindow;
 mod recovery;
 mod search;
-// Only the agent's tests ask for it until the harness lands.
-#[cfg_attr(not(test), allow(dead_code))]
 mod shellpath;
 mod slow;
 mod state;
@@ -28,6 +26,7 @@ mod window;
 mod tests;
 
 use std::path::Path;
+use std::sync::Arc;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -77,6 +76,14 @@ pub fn run() {
                 });
             },
         )
+        // Kept on this machine, in the OS's log folder: why an agent would not
+        // start, what it last printed, which turn was given up on.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("nuza_lib::agent::rpc", log::LevelFilter::Debug)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -84,6 +91,21 @@ pub fn run() {
             // Empty until a folder is opened, which is also what makes every
             // filesystem command refuse until then.
             app.manage(state::Windows::default());
+
+            // The agent, if one has been turned on - not started, only known
+            // about: it starts when it is first needed.
+            let decisions = agent::store::Store::open(app.path().app_data_dir().ok().as_deref());
+            let harness = Arc::new(agent::AgentHarness::new(
+                Arc::new(agent::start::command_for),
+                agent::start::sessions_root(),
+            ));
+            let kept = decisions.get();
+            harness.restore(kept.agent);
+            for vault in &kept.web_vaults {
+                harness.set_web_lookups(vault, true);
+            }
+            app.manage(decisions);
+            app.manage(harness);
 
             // What `nuza <path>` started this run on, if it did. Read here, not
             // by the window, so it does not depend on who asks first.
@@ -124,8 +146,14 @@ pub fn run() {
             tauri::WindowEvent::CloseRequested { .. } => {
                 multiwindow::window_closing(window.app_handle());
             }
-            // The window's folder goes with it, and its watcher with that.
+            // The window's folder goes with it, and its watcher with that -
+            // and its conversation with the agent, mid-answer or not.
             tauri::WindowEvent::Destroyed => {
+                if let Some(harness) = window.try_state::<Arc<agent::AgentHarness>>() {
+                    let harness = Arc::clone(&harness);
+                    let label = window.label().to_string();
+                    tauri::async_runtime::spawn(async move { harness.forget_window(&label).await });
+                }
                 multiwindow::window_gone(window.app_handle(), window.label());
             }
             _ => {}
@@ -172,8 +200,28 @@ pub fn run() {
             multiwindow::window_ready_to_quit,
             window::set_transparency,
             window::print_page,
-            menu::set_close_tab_shortcut
+            menu::set_close_tab_shortcut,
+            agent::commands::agent_state,
+            agent::commands::agent_detect,
+            agent::commands::agent_find_command,
+            agent::commands::agent_use,
+            agent::commands::agent_turn_off,
+            agent::commands::agent_warm,
+            agent::commands::agent_list_models,
+            agent::commands::agent_prompt,
+            agent::commands::agent_cancel,
+            agent::commands::agent_new_chat,
+            agent::commands::agent_login,
+            agent::commands::agent_set_web_lookups
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // A nuza that has quit must not leave an agent running.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(harness) = app.try_state::<Arc<agent::AgentHarness>>() {
+                    harness.shutdown_now();
+                }
+            }
+        });
 }

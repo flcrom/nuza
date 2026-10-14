@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, SlidersHorizontal, Palette, Keyboard, Info, LucideIcon } from "lucide-react";
+import { X, SlidersHorizontal, Palette, Keyboard, Info, Sparkles, LucideIcon } from "lucide-react";
 import { cn } from "cn";
 import { useExitAnimation } from "@/hooks/useExitAnimation";
 import { KeymapAction } from "@/lib/keymaps";
@@ -9,13 +9,16 @@ import { Appearance } from "@/lib/appearance";
 import AppearanceSettings from "./settings/AppearanceSettings";
 import KeymapSettings from "./settings/KeymapSettings";
 import InfoSettings from "./settings/InfoSettings";
+import AiSettings from "./settings/AiSettings";
+import type { ModelChoices } from "@/lib/ai/modelChoice";
 
-type SettingsSection = "general" | "appearance" | "keymaps" | "info";
+type SettingsSection = "general" | "appearance" | "keymaps" | "ai" | "info";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "keymaps", label: "Keymaps", icon: Keyboard },
+  { id: "ai", label: "AI", icon: Sparkles },
   { id: "info", label: "Info", icon: Info },
 ];
 
@@ -56,6 +59,11 @@ interface SettingsModalProps {
   onCheckUpdates: () => void;
   onOpenDownloadPage: () => void;
   onOpenChangelog: () => void;
+  vaultPath: string | null;
+  aiSendWholeNote: boolean;
+  setAiSendWholeNote: (enabled: boolean) => void;
+  aiModelChoices: ModelChoices;
+  setAiModelChoices: (choices: ModelChoices) => void;
 }
 
 export default function SettingsModal({
@@ -95,6 +103,11 @@ export default function SettingsModal({
   onCheckUpdates,
   onOpenDownloadPage,
   onOpenChangelog,
+  vaultPath,
+  aiSendWholeNote,
+  setAiSendWholeNote,
+  aiModelChoices,
+  setAiModelChoices,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const { isMounted, isClosing } = useExitAnimation(isOpen);
@@ -196,6 +209,16 @@ export default function SettingsModal({
                 setBinding={setKeymapBinding}
                 resetBinding={resetKeymapBinding}
                 resetAll={resetAllKeymaps}
+              />
+            )}
+
+            {activeSection === "ai" && (
+              <AiSettings
+                vaultPath={vaultPath}
+                sendWholeNote={aiSendWholeNote}
+                setSendWholeNote={setAiSendWholeNote}
+                modelChoices={aiModelChoices}
+                setModelChoices={setAiModelChoices}
               />
             )}
 
