@@ -14,6 +14,7 @@
 
 use std::ffi::OsString;
 use std::sync::OnceLock;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// Around the `PATH` in the shell's output, which may also hold whatever its
@@ -22,6 +23,7 @@ const MARKER: &str = "__NUZA_PATH__";
 
 /// How long a login shell gets to answer. One that takes longer is carrying
 /// on without, rather than holding up the first question to an agent.
+#[cfg(unix)]
 const PATIENCE: Duration = Duration::from_secs(3);
 
 static MERGED: OnceLock<OsString> = OnceLock::new();
