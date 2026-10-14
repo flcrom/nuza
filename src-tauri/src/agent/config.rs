@@ -232,14 +232,10 @@ mod tests {
     fn a_preset_is_started_from_the_pinned_adapter() {
         let claude = AgentConfig::ClaudeCode.launch(home()).unwrap();
         assert_eq!(claude.program, "npx");
+        let cache = Path::new("/Users/me").join(".npm/_nuza-claude");
         assert_eq!(
             claude.args,
-            [
-                "-y",
-                "--cache",
-                "/Users/me/.npm/_nuza-claude",
-                CLAUDE_ADAPTER
-            ]
+            ["-y", "--cache", &*cache.to_string_lossy(), CLAUDE_ADAPTER]
         );
         assert!(claude
             .state_dirs

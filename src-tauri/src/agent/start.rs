@@ -32,11 +32,16 @@ pub(crate) fn sandboxed() -> bool {
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-/// The temporary folder, as the sandbox sees it: resolved, because macOS's
-/// is behind a link and Seatbelt matches real paths.
+/// The temporary folder, as the sandbox sees it: resolved on macOS, where it
+/// is behind a link and Seatbelt matches real paths. Left as it is elsewhere -
+/// resolving it on Windows gives a `\\?\` path agents are not expecting.
 fn temp_root() -> PathBuf {
     let temp = std::env::temp_dir();
-    temp.canonicalize().unwrap_or(temp)
+    if cfg!(target_os = "macos") {
+        temp.canonicalize().unwrap_or(temp)
+    } else {
+        temp
+    }
 }
 
 /// Where the sessions' working directories go.

@@ -19,6 +19,7 @@ use std::time::Duration;
 
 /// Around the `PATH` in the shell's output, which may also hold whatever its
 /// startup files print - a version manager's banner, a message of the day.
+#[cfg_attr(not(unix), allow(dead_code))]
 const MARKER: &str = "__NUZA_PATH__";
 
 /// How long a login shell gets to answer. One that takes longer is carrying
@@ -81,6 +82,7 @@ fn login_shell_path() -> Option<OsString> {
 }
 
 /// The text printed between the two markers, if there is any.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn between_markers(output: &str) -> Option<&str> {
     let start = output.find(MARKER)? + MARKER.len();
     let end = start + output[start..].find(MARKER)?;
