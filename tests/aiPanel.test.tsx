@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import SetupChecklist from "../src/components/AiPanel/SetupChecklist";
 import TurnView from "../src/components/AiPanel/TurnView";
-import type { ChatTurn } from "../src/hooks/useAiChat";
+import type { ChatTurn, EditCard, TurnEdits } from "../src/hooks/useAiChat";
 import type { AgentErrorKind, Detection } from "../src/lib/ai/protocol";
 import { applyEvent, emptyAnswer } from "../src/lib/ai/transcript";
 import type { AgentEvent } from "../src/lib/ai/protocol";
@@ -22,8 +22,8 @@ function turn(events: AgentEvent[]): ChatTurn {
     question: "Tighten this up",
     intent: "ask",
     context: null,
-    sent: "the exact prompt",
     answer: events.reduce(applyEvent, emptyAnswer()),
+    edits: null,
   };
 }
 
@@ -81,9 +81,19 @@ describe("an answer in the panel", () => {
     expect(markup).toContain("Shorter.");
   });
 
-  test("shows what was sent, word for word, folded away", () => {
-    expect(render([])).toContain("What was sent");
-    expect(render([])).toContain("the exact prompt");
+  test("never shows nuza's own instructions to the agent", () => {
+    const markup = render([
+      {
+        kind: "token",
+        text: "You said: You are Claude Code, helping someone with a note in nuza, a markdown notes app on their computer.\n\n",
+      },
+      { kind: "token", text: '<note id="e72bcccb7ec">\nShip it.\n</note id="e72bcccb7ec">' },
+      { kind: "done", stop_reason: "end_turn" },
+    ]);
+    expect(markup).not.toContain("What was sent");
+    expect(markup).not.toContain("helping someone with a note in nuza");
+    expect(markup).not.toContain("e72bcccb7ec");
+    expect(markup).toContain("Ship it.");
   });
 
   test("while it starts, says who is being asked", () => {
@@ -146,5 +156,66 @@ describe("a failed answer has its fix next to it", () => {
 
   test("every failure is said where it happened, not in a toast", () => {
     expect(failed("other", "the network is unreachable")).toContain('role="alert"');
+  });
+});
+
+describe("an answer that proposes edits", () => {
+  const withEdits = (cards: EditCard[], extra: Partial<TurnEdits> = {}) =>
+    renderToStaticMarkup(
+      <TurnView
+        turn={{
+          ...turn([
+            { kind: "token", text: 'Cut the hedging.\n\n```nuza-edits\n[{"find":"a","replace":"b"}]\n```' },
+            { kind: "done", stop_reason: "end_turn" },
+          ]),
+          edits: { path: "/v/plan.md", cards, aligning: false, shown: true, problem: null, ...extra },
+        }}
+        agent="Claude Code"
+        actions={actions}
+      />
+    );
+  const card = (id: string, status: EditCard["status"] = "pending"): EditCard => ({
+    id,
+    find: "It is probably the case that the release will slip.",
+    replace: "The release slips.",
+    why: "Cut the hedging.",
+    status,
+  });
+
+  test("shows the prose, and the edits as cards rather than the JSON they came in", () => {
+    const markup = withEdits([card("a")]);
+    expect(markup).toContain("Cut the hedging.");
+    expect(markup).not.toContain("nuza-edits");
+    expect(markup).not.toContain("&quot;find&quot;");
+    expect(markup).toContain("Proposed edit 1 of 1");
+    expect(markup).toContain("The release slips.");
+  });
+
+  test("a card can be accepted or rejected while it waits, and says how it went after", () => {
+    expect(withEdits([card("a")])).toContain(">Accept<");
+    const decided = withEdits([card("a", "accepted"), card("b", "stale")]);
+    expect(decided).toContain("Accepted");
+    expect(decided).toContain("This no longer matches the note");
+    expect(decided).not.toContain(">Accept<");
+  });
+
+  test("two or more waiting can be taken or dropped together", () => {
+    expect(withEdits([card("a"), card("b")])).toContain("Accept all");
+    expect(withEdits([card("a")])).not.toContain("Accept all");
+  });
+
+  test("while the one retry runs, says what it is doing", () => {
+    expect(withEdits([], { aligning: true })).toContain("Lining the changes up with your note");
+  });
+
+  test("edits for a note that is not open offer to show it", () => {
+    expect(withEdits([card("a")], { shown: false })).toContain("Show in the note");
+  });
+
+  test("a block still being written is not shown as JSON", () => {
+    const markup = render([{ kind: "token", text: 'Sure.\n\n```nuza-edits\n[{"find": "It is' }]);
+    expect(markup).toContain("Sure.");
+    expect(markup).toContain("Writing the changes");
+    expect(markup).not.toContain("nuza-edits");
   });
 });

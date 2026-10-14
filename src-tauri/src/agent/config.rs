@@ -28,6 +28,9 @@ const CLAUDE_NPM_CACHE: &str = "~/.npm/_nuza-claude";
 /// nuza can repair after a download was stopped part way (see `start.rs`).
 const CODEX_NPM_CACHE: &str = "~/.npm/_nuza-codex";
 
+/// Programs that run a script, so the script is what the agent is called.
+const INTERPRETERS: [&str; 7] = ["node", "nodejs", "bun", "deno", "python", "python3", "npx"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub(crate) enum AgentConfig {
@@ -92,11 +95,26 @@ impl AgentConfig {
             AgentConfig::ClaudeCode => "Claude Code".to_string(),
             AgentConfig::Codex => "Codex".to_string(),
             AgentConfig::OpenCode => "OpenCode".to_string(),
-            AgentConfig::Custom { command, .. } => Path::new(command.trim())
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| "The agent".to_string()),
+            AgentConfig::Custom { command, args, .. } => {
+                let name_of = |path: &str| {
+                    Path::new(path.trim())
+                        .file_stem()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .filter(|name| !name.is_empty())
+                };
+                let program = name_of(command);
+                // `node ~/agents/mine.js` is "mine", not "node": an
+                // interpreter is not what anyone thinks of as the agent.
+                let script = args.first().filter(|_| {
+                    program
+                        .as_deref()
+                        .is_some_and(|program| INTERPRETERS.contains(&program))
+                });
+                script
+                    .and_then(|script| name_of(script))
+                    .or(program)
+                    .unwrap_or_else(|| "The agent".to_string())
+            }
         }
     }
 
@@ -358,6 +376,12 @@ mod tests {
             data_dirs: vec![],
         };
         assert_eq!(custom.label(), "my-agent");
+        let script = AgentConfig::Custom {
+            command: "node".into(),
+            args: vec!["~/agents/mock-acp-agent.mjs".into(), "--flavor".into()],
+            data_dirs: vec![],
+        };
+        assert_eq!(script.label(), "mock-acp-agent");
     }
 
     #[test]

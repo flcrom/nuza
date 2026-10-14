@@ -582,6 +582,13 @@ function App() {
     returnFocusToEditor();
   }, [returnFocusToEditor]);
 
+  /** The editor showing the note at `path`, if one is: where the AI panel's edits go. */
+  const aiViewFor = useCallback(
+    (path: string) => (path === currentFile ? editorView : path === sideFile ? sideView : null),
+    [currentFile, editorView, sideFile, sideView]
+  );
+  const openForAi = useCallback((path: string) => selectFile(path), [selectFile]);
+
   /** The note the AI panel is asking about, as its editor has it right now - unsaved edits and all. */
   const readAiNote = useCallback((): NoteSnapshot | null => {
     const fromSide = aiFromSide.current && sideView && sideFile;
@@ -940,6 +947,8 @@ function App() {
               onResizeStart={startAiPanelResize}
               onResizeReset={resetAiPanelWidth}
               readNote={readAiNote}
+              viewFor={aiViewFor}
+              openNote={openForAi}
               sendWholeNote={aiSendWholeNote}
               vaultPath={rootPath}
               modelChoices={aiModelChoices}

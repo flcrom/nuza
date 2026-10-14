@@ -4,6 +4,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "@uiw/codemirror-extensions-basic-setup";
 import { directoryOf, liveMarkdown, noteDirectory, vaultDirectory } from "@/lib/markdown";
+import { aiDiff } from "@/lib/markdown/aiDiff";
 import { documentsToEvict } from "@/lib/documentCache";
 import {
   countDocument,
@@ -27,6 +28,9 @@ const writingSurface: Extension = [
   }),
   keymap.of([indentWithTab]),
   liveMarkdown,
+  // An agent's proposed edits, drawn over the note until someone accepts or
+  // rejects them. Inert unless the AI panel has put some there.
+  aiDiff,
 ];
 
 /**
