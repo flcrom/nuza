@@ -413,9 +413,25 @@ struct Harnessed {
     harness: AgentHarness,
     _root: tempfile::TempDir,
     sessions: std::path::PathBuf,
+    _one_at_a_time: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-fn harnessed(flavor: &'static str) -> Harnessed {
+/// On Windows the harness tests take turns. Run side by side, a mock agent
+/// that exited was sometimes not seen to have gone - its output pipe held
+/// open by another test's agent, started at the same moment - and the turn
+/// waited on it until the test gave up. One at a time, every one of them
+/// passes; and the app itself only ever runs one agent.
+async fn one_at_a_time() -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    if !cfg!(windows) {
+        return None;
+    }
+    static TURNS: std::sync::LazyLock<Arc<tokio::sync::Mutex<()>>> =
+        std::sync::LazyLock::new(Arc::default);
+    Some(Arc::clone(&TURNS).lock_owned().await)
+}
+
+async fn harnessed(flavor: &'static str) -> Harnessed {
+    let one_at_a_time = one_at_a_time().await;
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().canonicalize().unwrap().join("sessions");
     let harness = AgentHarness::new(Arc::new(move |_| Ok(mock(flavor))), sessions.clone());
@@ -433,6 +449,7 @@ fn harnessed(flavor: &'static str) -> Harnessed {
         harness,
         _root: root,
         sessions,
+        _one_at_a_time: one_at_a_time,
     }
 }
 
@@ -489,7 +506,7 @@ fn done(reason: &str) -> AgentEvent {
 #[tokio::test]
 async fn streams_tokens_then_done_in_order() {
     for flavor in ["codex", "claude", "opencode"] {
-        let h = harnessed(flavor);
+        let h = harnessed(flavor).await;
         let (panel, outcome) = ask(&h.harness, "main", "hello there").await;
         assert_eq!(outcome.unwrap(), "end_turn", "{flavor}");
         assert_eq!(panel.said(), "You said: hello there", "{flavor}");
@@ -502,7 +519,7 @@ async fn streams_tokens_then_done_in_order() {
 async fn done_never_arrives_before_the_last_token() {
     // Nothing between the words and the end is held back on purpose, so a
     // `Done` sent any way but behind them would overtake them here.
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     for n in 0..15 {
         let (panel, _) = ask(&h.harness, "main", &format!("turn {n} of many words")).await;
         assert_eq!(panel.said(), format!("You said: turn {n} of many words"));
@@ -513,19 +530,19 @@ async fn done_never_arrives_before_the_last_token() {
 #[tokio::test]
 async fn each_agent_is_left_in_a_mode_that_asks_before_changing_anything() {
     for (flavor, mode) in [("codex", "read-only"), ("claude", "default")] {
-        let h = harnessed(flavor);
+        let h = harnessed(flavor).await;
         let (panel, _) = ask(&h.harness, "main", "WHICH_MODE").await;
         assert_eq!(panel.said(), format!("mode {mode}"), "{flavor}");
     }
     // An agent with no modes at all is still used; the sandbox is what holds.
-    let h = harnessed("opencode");
+    let h = harnessed("opencode").await;
     let (panel, outcome) = ask(&h.harness, "main", "hello").await;
     assert!(outcome.is_ok(), "{:?}", panel.events());
 }
 
 #[tokio::test]
 async fn an_agent_with_no_mode_that_asks_is_not_used() {
-    let h = harnessed("reckless");
+    let h = harnessed("reckless").await;
     let (panel, outcome) = ask(&h.harness, "main", "hello").await;
     let error = outcome.unwrap_err();
     assert!(
@@ -539,7 +556,7 @@ async fn an_agent_with_no_mode_that_asks_is_not_used() {
 
 #[tokio::test]
 async fn permission_requests_are_denied_and_surfaced() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let (panel, _) = ask(&h.harness, "main", "PERMISSION").await;
     assert_eq!(panel.said(), "permission outcome: cancelled/-");
     assert!(panel.events().contains(&AgentEvent::Refused {
@@ -552,7 +569,7 @@ async fn permission_requests_are_denied_and_surfaced() {
 
 #[tokio::test]
 async fn asking_for_a_file_or_a_terminal_is_refused_and_said_so() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, _) = ask(&h.harness, "main", "ASK_FS").await;
     assert_eq!(panel.said(), "fs answer: -32601");
     assert!(panel.events().contains(&AgentEvent::Refused {
@@ -562,7 +579,7 @@ async fn asking_for_a_file_or_a_terminal_is_refused_and_said_so() {
 
 #[tokio::test]
 async fn a_web_fetch_is_refused_unless_the_vault_allows_it() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let vault = tempfile::tempdir().unwrap();
     let fetch = |panel: &Panel| panel.said();
 
@@ -614,7 +631,7 @@ async fn a_web_fetch_is_refused_unless_the_vault_allows_it() {
 
 #[tokio::test]
 async fn thoughts_steps_plans_and_usage_reach_the_panel() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, _) = ask(&h.harness, "main", "RICH").await;
     let events = panel.events();
     assert!(events.contains(&AgentEvent::Thought {
@@ -640,7 +657,7 @@ async fn thoughts_steps_plans_and_usage_reach_the_panel() {
 
 #[tokio::test]
 async fn what_the_panel_has_no_use_for_never_reaches_it() {
-    let h = harnessed("opencode");
+    let h = harnessed("opencode").await;
     let (panel, _) = ask(&h.harness, "main", "NOISE").await;
     assert_eq!(panel.said(), "You said: NOISE");
     // The account update, the agent's commands and the chat's title are all
@@ -658,7 +675,7 @@ async fn what_the_panel_has_no_use_for_never_reaches_it() {
 
 #[tokio::test]
 async fn a_hung_turn_is_given_up_on() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = h.harness.with_idle_timeout(Duration::from_millis(600));
     let started = std::time::Instant::now();
     let (panel, outcome) = ask(&harness, "main", "STALL").await;
@@ -686,7 +703,7 @@ async fn a_hung_turn_is_given_up_on() {
 #[tokio::test]
 async fn a_slow_turn_that_keeps_talking_is_not_cut_off() {
     // Four seconds of words in all, never more than 20ms apart.
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = h.harness.with_idle_timeout(Duration::from_millis(500));
     let (panel, outcome) = ask(&harness, "main", "SLOW").await;
     assert_eq!(outcome.unwrap(), "end_turn");
@@ -695,7 +712,7 @@ async fn a_slow_turn_that_keeps_talking_is_not_cut_off() {
 
 #[tokio::test]
 async fn a_crashed_adapter_fails_the_turn_with_its_last_words() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let (panel, outcome) = ask(&h.harness, "main", "CRASH").await;
     let error = outcome.unwrap_err();
     assert_eq!(error.kind, ErrorKind::AdapterCrashed);
@@ -712,7 +729,7 @@ async fn a_crashed_adapter_fails_the_turn_with_its_last_words() {
 
 #[tokio::test]
 async fn a_crashed_adapter_is_started_again_by_the_next_question() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let _ = ask(&h.harness, "main", "CRASH").await;
     let (panel, outcome) = ask(&h.harness, "main", "hello again").await;
     assert!(outcome.is_ok(), "{:?}", panel.events());
@@ -725,7 +742,7 @@ async fn a_crashed_adapter_is_started_again_by_the_next_question() {
 
 #[tokio::test]
 async fn cancel_stops_a_turn_early_but_still_finishes_it() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = Arc::new(h.harness);
     let panel = Panel::default();
     let running = {
@@ -754,7 +771,7 @@ async fn cancel_stops_a_turn_early_but_still_finishes_it() {
 
 #[tokio::test]
 async fn one_window_asks_one_thing_at_a_time() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = Arc::new(h.harness);
     let first = {
         let harness = Arc::clone(&harness);
@@ -773,7 +790,7 @@ async fn one_window_asks_one_thing_at_a_time() {
 
 #[tokio::test]
 async fn two_windows_hold_two_conversations() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = Arc::new(h.harness);
     let ask_in = |window: &'static str, text: &'static str| {
         let harness = Arc::clone(&harness);
@@ -791,7 +808,7 @@ async fn two_windows_hold_two_conversations() {
 
 #[tokio::test]
 async fn the_session_cwd_is_a_fresh_empty_dir_outside_the_vault() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let vault = tempfile::tempdir().unwrap();
     let panel = Panel::default();
     h.harness
@@ -821,7 +838,7 @@ async fn the_session_cwd_is_a_fresh_empty_dir_outside_the_vault() {
 
 #[tokio::test]
 async fn closing_a_window_cancels_its_turn_and_drops_its_session() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = Arc::new(h.harness);
     let (before, _) = ask(&harness, "main", "SHOW_CWD").await;
 
@@ -841,7 +858,7 @@ async fn closing_a_window_cancels_its_turn_and_drops_its_session() {
 
 #[tokio::test]
 async fn deltas_are_coalesced_before_crossing_ipc() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let harness = h
         .harness
         .with_coalescing(Duration::from_millis(200), 1 << 20);
@@ -859,14 +876,14 @@ async fn deltas_are_coalesced_before_crossing_ipc() {
 #[tokio::test]
 async fn moves_off_a_model_the_account_does_not_offer() {
     // The Codex mock starts every session on a model it does not offer.
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, _) = ask(&h.harness, "main", "SHOW_MODEL").await;
     assert_eq!(panel.said(), "model current[low]");
 }
 
 #[tokio::test]
 async fn switches_again_when_a_prompt_is_turned_down() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, outcome) = ask(&h.harness, "main", "REJECT_MODEL SHOW_MODEL").await;
     assert!(outcome.is_ok(), "{:?}", panel.events());
     assert_eq!(panel.said(), "model backup[low]");
@@ -881,7 +898,7 @@ async fn switches_again_when_a_prompt_is_turned_down() {
 
 #[tokio::test]
 async fn reports_the_error_when_every_model_is_turned_down() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, outcome) = ask(&h.harness, "main", "REJECT_ALL").await;
     assert_eq!(outcome.unwrap_err().kind, ErrorKind::ModelUnavailable);
     assert!(matches!(
@@ -896,7 +913,7 @@ async fn reports_the_error_when_every_model_is_turned_down() {
 #[tokio::test]
 async fn the_model_the_person_picks_is_the_one_that_answers() {
     for (flavor, model) in [("codex", "backup[low]"), ("claude", "haiku")] {
-        let h = harnessed(flavor);
+        let h = harnessed(flavor).await;
         let models = h.harness.list_models().await.unwrap();
         assert!(models.iter().any(|m| m.id == model), "{flavor}: {models:?}");
 
@@ -911,7 +928,7 @@ async fn the_model_the_person_picks_is_the_one_that_answers() {
 
 #[tokio::test]
 async fn nothing_is_started_while_ai_is_off() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     h.harness.set_agent(None).await;
     let (panel, outcome) = ask(&h.harness, "main", "hello").await;
     assert_eq!(outcome.unwrap_err().kind, ErrorKind::Off);
@@ -922,7 +939,7 @@ async fn nothing_is_started_while_ai_is_off() {
 
 #[tokio::test]
 async fn a_usage_limit_is_the_agents_and_said_to_be() {
-    let h = harnessed("claude");
+    let h = harnessed("claude").await;
     let (_, outcome) = ask(&h.harness, "main", "USAGE_LIMIT").await;
     let error = outcome.unwrap_err();
     assert_eq!(error.kind, ErrorKind::UsageLimit);
@@ -960,6 +977,7 @@ async fn a_custom_agent_that_cannot_start_is_reported_at_once() {
 
 #[tokio::test]
 async fn a_custom_agent_runs_a_conversation_end_to_end() {
+    let _turn = one_at_a_time().await;
     // The mock, through the custom-agent path and - on macOS - the sandbox,
     // with its script in a folder the sandbox would otherwise keep it from.
     let harness = AgentHarness::new(
@@ -1006,7 +1024,7 @@ async fn the_webview_cannot_choose_the_command() {
 #[cfg(unix)]
 #[tokio::test]
 async fn no_agent_process_survives_shutdown() {
-    let h = harnessed("codex");
+    let h = harnessed("codex").await;
     let (panel, _) = ask(&h.harness, "main", "SHOW_PID").await;
     let pid: libc::pid_t = panel
         .said()
