@@ -32,6 +32,7 @@ import { useVaults } from "./hooks/useVaults";
 import { useAppearance } from "./hooks/useAppearance";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePersistedState } from "./hooks/usePersistedState";
+import { NO_MODEL_CHOICES, type ModelChoices } from "./lib/ai/modelChoice";
 import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useOutline } from "./hooks/useOutline";
 import { hasEmbeds, refreshEmbeds, setVaultFiles } from "./lib/markdown/embedIndex";
@@ -110,6 +111,10 @@ function App() {
   const [editorFontSize, setEditorFontSize] = usePersistedState("editorFontSize", DEFAULT_EDITOR_FONT_SIZE);
   const [contentWidth, setContentWidth] = usePersistedState("editorContentWidth", DEFAULT_CONTENT_WIDTH);
   const [lineHeight, setLineHeight] = usePersistedState("editorLineHeight", DEFAULT_LINE_HEIGHT);
+  // What the AI panel sends, and which model answers in which vault. Nothing
+  // reads either until an agent has been turned on.
+  const [aiSendWholeNote, setAiSendWholeNote] = usePersistedState("aiSendWholeNote", true);
+  const [aiModelChoices, setAiModelChoices] = usePersistedState<ModelChoices>("aiModel", NO_MODEL_CHOICES);
 
   // Read by the editor's theme through the stylesheet, so a slider being
   // dragged restyles the note without the editor being reconfigured.
@@ -1061,6 +1066,11 @@ function App() {
         onCheckUpdates={checkForUpdates}
         onOpenDownloadPage={openDownloadPage}
         onOpenChangelog={openChangelog}
+        vaultPath={rootPath}
+        aiSendWholeNote={aiSendWholeNote}
+        setAiSendWholeNote={setAiSendWholeNote}
+        aiModelChoices={aiModelChoices}
+        setAiModelChoices={setAiModelChoices}
       />
     </main>
   );

@@ -17,17 +17,20 @@
 //             does not; models as a `configOptions` entry; extra
 //             notifications nuza has no use for
 //   opencode  no modes at all; a line on stdout that is not JSON-RPC
+//   reckless  modes, none of which asks before changing anything
 //
 // What a prompt does is scripted by words in it:
 //
 //   (anything)      streams "You said: <text>" a word at a time
 //   SHOW_PROMPT     streams the whole prompt text back, untouched
 //   SHOW_MODEL      "model <id>"           SHOW_MCP   "mcp <the mcpServers>"
-//   SHOW_MODE       "mode <id>"
+//   WHICH_MODE      "mode <id>"
+//   SHOW_CWD        "cwd <path> <how many entries it has>"
+//   SHOW_PID        "pid <the mock's process id>"
 //   RICH            a thought, a step and its update, a plan and usage first
 //   NOISE           unknown notifications and a non-JSON line mid-turn
 //   SLOW            200 words, 20ms apart, so a test can cancel part way
-//   STALL           says nothing and never answers
+//   STALL           says nothing, and answers only when cancelled
 //   CRASH           prints its reasons on stderr and exits
 //   REFUSAL         ends the turn with stopReason "refusal"
 //   USAGE_LIMIT     fails the prompt with a plan-limit error
@@ -39,6 +42,7 @@
 //   REJECT_MODEL    the model that replaced the start one is turned down too
 //   REJECT_ALL      every model is turned down
 
+import fs from "node:fs";
 import readline from "node:readline";
 
 const flavor = process.argv.includes("--flavor")
@@ -49,6 +53,7 @@ const MODES = {
   codex: { current: "auto", available: ["read-only", "auto", "full-access"] },
   claude: { current: "default", available: ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] },
   opencode: null,
+  reckless: { current: "auto", available: ["auto", "bypassPermissions"] },
 };
 // A session in one of these does not ask before it changes something, so the
 // mock will not answer in it: a test that forgets to lock a session down
@@ -60,6 +65,7 @@ let sessionCounter = 0;
 let requestCounter = 0;
 const waitingOnClient = new Map();
 const cancelled = new Set();
+const stalled = new Map(); // sessionId -> the prompt request left unanswered
 
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const respond = (id, result) => send({ jsonrpc: "2.0", id, result });
@@ -154,7 +160,7 @@ async function prompt(id, { sessionId, prompt: parts }) {
     .join("");
   let reply = `You said: ${text}`;
 
-  if (text.includes("STALL")) return;
+  if (text.includes("STALL")) return void stalled.set(sessionId, id);
 
   if (text.includes("CRASH")) {
     process.stderr.write("npm error code EACCES\nnpm error path /Users/me/.npm/_cacache\n");
@@ -238,8 +244,10 @@ async function prompt(id, { sessionId, prompt: parts }) {
   }
 
   if (text.includes("SHOW_MODEL")) reply = `model ${session.model}`;
-  if (text.includes("SHOW_MODE")) reply = `mode ${session.mode}`;
+  if (text.includes("WHICH_MODE")) reply = `mode ${session.mode}`;
   if (text.includes("SHOW_MCP")) reply = `mcp ${JSON.stringify(session.mcpServers)}`;
+  if (text.includes("SHOW_CWD")) reply = `cwd ${session.cwd} ${fs.readdirSync(session.cwd).length}`;
+  if (text.includes("SHOW_PID")) reply = `pid ${process.pid}`;
 
   if (text.includes("REFUSAL")) {
     update(sessionId, {
@@ -318,6 +326,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       const session = sessions.get(params.sessionId);
       if (!session) return fail(id, "Session not found");
       session.mcpServers = params.mcpServers ?? [];
+      session.cwd = params.cwd;
       respond(id, { ...modesOf(session), ...modelsOf(session) });
       break;
     }
@@ -346,7 +355,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       break;
     }
     case "session/cancel":
-      cancelled.add(params.sessionId); // a notification: never answered
+      // A notification: never answered itself. A turn that had wedged ends
+      // now, as cancelled; one that is talking stops at its next word.
+      if (stalled.has(params.sessionId)) {
+        respond(stalled.get(params.sessionId), { stopReason: "cancelled" });
+        stalled.delete(params.sessionId);
+      } else cancelled.add(params.sessionId);
       break;
     case "session/prompt":
       void prompt(id, params);

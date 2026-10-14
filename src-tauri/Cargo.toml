@@ -54,8 +54,9 @@ tauri-utils = "2"
 # stdout (agent/rpc.rs). All of it was already compiled in under tauri.
 tokio = { version = "1", features = ["sync", "process", "io-util", "time", "macros", "rt"] }
 # What the agent prints on stderr, and why it was given up on - for
-# diagnosis, kept on this machine.
+# diagnosis, written to the OS's log folder and kept on this machine.
 log = "0.4"
+tauri-plugin-log = "2"
 
 # `nuza <path>` while the app is already open hands the path to the open
 # window rather than starting a second one. Desktop only, like the command.
