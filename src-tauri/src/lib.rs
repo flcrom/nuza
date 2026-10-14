@@ -1,3 +1,4 @@
+mod agent;
 #[cfg(target_os = "linux")]
 mod appimage;
 mod cli;
@@ -11,6 +12,9 @@ mod menu;
 mod multiwindow;
 mod recovery;
 mod search;
+// Only the agent's tests ask for it until the harness lands.
+#[cfg_attr(not(test), allow(dead_code))]
+mod shellpath;
 mod slow;
 mod state;
 mod tags;

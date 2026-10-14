@@ -1,5 +1,5 @@
-# Runs on every push to main and every pull request, so a type error or a
-# clippy warning is caught here rather than on the release branch.
+# Runs on every push to main or main-v2 and every pull request, so a type
+# error or a clippy warning is caught here rather than on the release branch.
 #
 # The Rust side runs on all three platforms deliberately: a good deal of
 # src-tauri is behind `#[cfg(target_os = ...)]` - the macOS menu bar, the
@@ -8,7 +8,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, main-v2]
   pull_request:
 
 # A new push supersedes whatever was already running for the same branch.
