@@ -38,9 +38,11 @@ const TURN_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 /// How often a turn is checked against that.
 const IDLE_CHECK: Duration = Duration::from_millis(250);
 /// How long an agent gets to answer `initialize`. A first start through
-/// `npx` fetches the adapter and has been seen to take over a minute and a
-/// half.
-const START_PATIENCE: Duration = Duration::from_secs(300);
+/// `npx` downloads the adapter, which has been seen to take over four minutes
+/// on an ordinary connection - and stopping it part way leaves the download
+/// half-written. An agent that exits is noticed at once whatever this says;
+/// this only bounds one that hangs while still running.
+const START_PATIENCE: Duration = Duration::from_secs(15 * 60);
 /// How many models one question may be moved through before the person is
 /// told their plan turned it down.
 const MAX_MODEL_SWITCHES: usize = 4;
@@ -59,6 +61,26 @@ const ASKS_FIRST: [&str; 4] = ["read-only", "default", "ask", "manual"];
 pub(crate) type Launcher = Arc<dyn Fn(&AgentConfig) -> Result<Command, String> + Send + Sync>;
 /// Where a turn's events go: a window's IPC channel, or a test's list.
 pub(crate) type Emit = Arc<dyn Fn(AgentEvent) + Send + Sync>;
+
+/// What is asked in a turn.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Question<'a> {
+    /// The words, for a conversation that already has what it needs.
+    pub(crate) text: &'a str,
+    /// The same question with everything it needs - the note, the rules -
+    /// for a conversation the agent does not have: a new one, or one it lost
+    /// when it restarted. Only the harness knows which it will be.
+    pub(crate) in_full: Option<&'a str>,
+}
+
+impl<'a> From<&'a str> for Question<'a> {
+    fn from(text: &'a str) -> Self {
+        Self {
+            text,
+            in_full: None,
+        }
+    }
+}
 
 /// A model the person's plan offers, for the picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -255,17 +277,18 @@ impl AgentHarness {
         }
     }
 
-    /// Asks the question `text` in `window`'s conversation, about `vault`,
-    /// on `model` if one is given. What the agent says goes to `emit` as it
-    /// arrives, ending with `Done` or `Failed`; the same outcome is returned.
-    pub(crate) async fn prompt(
+    /// Asks `question` in `window`'s conversation, about `vault`, on `model`
+    /// if one is given. What the agent says goes to `emit` as it arrives,
+    /// ending with `Done` or `Failed`; the same outcome is returned.
+    pub(crate) async fn prompt<'a>(
         &self,
         window: &str,
         vault: Option<&Path>,
-        text: &str,
+        question: impl Into<Question<'a>>,
         model: Option<&str>,
         emit: Emit,
     ) -> Result<String, AgentError> {
+        let question = question.into();
         let config = self.current().ok_or_else(AgentError::off)?;
         if locked(&self.turns)
             .values()
@@ -279,7 +302,7 @@ impl AgentHarness {
         let (sink, receiver) = mpsc::unbounded_channel();
         let delivered = tokio::spawn(coalesce(receiver, Arc::clone(&emit), self.coalesce));
         let outcome = self
-            .run_turn(&config, window, vault, text, model, &sink)
+            .run_turn(&config, window, vault, question, model, &sink)
             .await;
         // The coalescer stops at the turn's last event, once it has passed
         // everything before it on.
@@ -301,7 +324,7 @@ impl AgentHarness {
         config: &AgentConfig,
         window: &str,
         vault: Option<&Path>,
-        text: &str,
+        question: Question<'_>,
         model: Option<&str>,
         sink: &mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<(String, String), (Option<String>, AgentError)> {
@@ -316,10 +339,14 @@ impl AgentHarness {
             (None, error)
         };
         let connection = self.connection().await.map_err(fail_now)?;
-        let session = self
+        let (session, fresh) = self
             .session_for(&connection, config, window, vault, sink)
             .await
             .map_err(fail_now)?;
+        let text = match question.in_full {
+            Some(in_full) if fresh => in_full,
+            _ => question.text,
+        };
 
         locked(&self.turns).insert(
             session.clone(),
@@ -498,7 +525,8 @@ impl AgentHarness {
     }
 
     /// The session `window` talks in, made (or picked up again) if it has
-    /// none in the running agent.
+    /// none in the running agent - and whether it is new, and so has heard
+    /// nothing of the conversation so far.
     async fn session_for(
         &self,
         connection: &Connection,
@@ -506,11 +534,11 @@ impl AgentHarness {
         window: &str,
         vault: Option<&Path>,
         sink: &mpsc::UnboundedSender<AgentEvent>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, bool), String> {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.get(window) {
             if session.process == connection.process && session.vault.as_deref() == vault {
-                return Ok(session.id.clone());
+                return Ok((session.id.clone(), false));
             }
         }
         let previous = sessions.remove(window);
@@ -544,6 +572,7 @@ impl AgentHarness {
                 Err(error) => log::warn!("could not pick the conversation up again: {error}"),
             }
         }
+        let fresh = resumed.is_none();
         let (id, answer) = match resumed {
             Some(resumed) => resumed,
             None => {
@@ -590,7 +619,7 @@ impl AgentHarness {
                 _cwd: cwd,
             },
         );
-        Ok(id)
+        Ok((id, fresh))
     }
 
     fn fresh_cwd(&self) -> Result<tempfile::TempDir, String> {

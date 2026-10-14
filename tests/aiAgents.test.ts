@@ -8,6 +8,7 @@ import {
   sameAgent,
   splitArgs,
   splitDirs,
+  startingNote,
 } from "../src/lib/ai/agents";
 import { chooseModel, modelFor, NO_MODEL_CHOICES } from "../src/lib/ai/modelChoice";
 import type { Detection } from "../src/lib/ai/protocol";
@@ -136,5 +137,13 @@ describe("the model chosen for a vault", () => {
     const codex = { kind: "codex" as const };
     const choices = chooseModel(chooseModel(NO_MODEL_CHOICES, codex, "/n", "x"), codex, "/n", null);
     expect(modelFor(choices, codex, "/n")).toBeNull();
+  });
+});
+
+describe("while an agent starts", () => {
+  test("one fetched through npx warns the first start can take minutes", () => {
+    expect(startingNote({ kind: "claudeCode" })).toContain("can take a few minutes");
+    expect(startingNote({ kind: "openCode" })).toBe("Starting OpenCode…");
+    expect(startingNote(null)).toBeNull();
   });
 });

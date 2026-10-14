@@ -63,6 +63,9 @@ pub(crate) fn command_for(config: &AgentConfig) -> Result<Command, String> {
             format!("could not start {name}: `{}` was not found", launch.program)
         }
     })?;
+    if let Some(cache) = config.npm_cache(home.as_deref()) {
+        repair_npm_cache(&cache);
+    }
     let scratch = temp_root().join(SCRATCH);
     std::fs::create_dir_all(&scratch)
         .map_err(|error| format!("could not start {name}: no scratch folder: {error}"))?;
@@ -75,6 +78,30 @@ pub(crate) fn command_for(config: &AgentConfig) -> Result<Command, String> {
         // read: Node gives up outright in a working directory it cannot.
         .current_dir(&scratch);
     Ok(command)
+}
+
+/// Clears away any adapter download in nuza's own npm cache that was stopped
+/// part way - by the app quitting, or the agent being turned off, while `npx`
+/// was still fetching it.
+///
+/// `npx` keeps each package it runs in `_npx/<hash>`, and takes a folder that
+/// is there as one that is ready: a half-written one, with no `package.json`
+/// yet, fails every start after it with "ENOENT" until it is removed by hand.
+/// The cache is nuza's alone, so nothing else can be using what is removed.
+pub(crate) fn repair_npm_cache(cache: &Path) {
+    let Ok(entries) = std::fs::read_dir(cache.join("_npx")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let folder = entry.path();
+        if folder.is_dir() && !folder.join("package.json").is_file() {
+            log::warn!(
+                "removing an adapter download that never finished: {}",
+                folder.display()
+            );
+            let _ = std::fs::remove_dir_all(&folder);
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -154,4 +181,27 @@ fn unfenced(program: &Path, launch: &Launch) -> Command {
     let mut command = Command::new(program);
     command.args(&launch.args);
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_stopped_part_way_is_cleared_and_a_finished_one_kept() {
+        let cache = tempfile::tempdir().unwrap();
+        let npx = cache.path().join("_npx");
+        let finished = npx.join("aaaa");
+        let half = npx.join("bbbb");
+        std::fs::create_dir_all(finished.join("node_modules")).unwrap();
+        std::fs::write(finished.join("package.json"), "{}").unwrap();
+        std::fs::create_dir_all(half.join("node_modules/@scope/pkg")).unwrap();
+
+        repair_npm_cache(cache.path());
+
+        assert!(finished.join("package.json").is_file());
+        assert!(!half.exists());
+        // A cache with nothing in it yet is fine too.
+        repair_npm_cache(&cache.path().join("nowhere"));
+    }
 }

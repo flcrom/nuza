@@ -24,6 +24,8 @@ const SECTIONS: { id: SettingsSection; label: string; icon: LucideIcon }[] = [
 
 interface SettingsModalProps {
   isOpen: boolean;
+  /** The pane to open on, when something asked for one. */
+  initialSection?: SettingsSection;
   onClose: () => void;
   vimEnabled: boolean;
   setVimEnabled: (enabled: boolean) => void;
@@ -68,6 +70,7 @@ interface SettingsModalProps {
 
 export default function SettingsModal({
   isOpen,
+  initialSection,
   onClose,
   vimEnabled,
   setVimEnabled,
@@ -110,6 +113,12 @@ export default function SettingsModal({
   setAiModelChoices,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+
+  // Opened from somewhere that wants a particular pane - the AI panel's
+  // "Set up" - it opens on that one.
+  useEffect(() => {
+    if (isOpen && initialSection) setActiveSection(initialSection);
+  }, [isOpen, initialSection]);
   const { isMounted, isClosing } = useExitAnimation(isOpen);
 
   useEffect(() => {

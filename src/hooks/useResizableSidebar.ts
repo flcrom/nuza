@@ -10,30 +10,69 @@ export const MIN_SIDEBAR_WIDTH = 224;
 export const MAX_SIDEBAR_WIDTH = 480;
 const DEFAULT_SIDEBAR_WIDTH = 240;
 
+/** The AI panel: wide enough for a proposal card, never wider than the note deserves. */
+export const MIN_AI_PANEL_WIDTH = 300;
+export const MAX_AI_PANEL_WIDTH = 560;
+const DEFAULT_AI_PANEL_WIDTH = 360;
+
 /** How long a width has to hold still before it is written to storage. */
 const PERSIST_DELAY_MS = 250;
 
+interface PanelLimits {
+  min: number;
+  max: number;
+  initial: number;
+}
+
+const SIDEBAR: PanelLimits = {
+  min: MIN_SIDEBAR_WIDTH,
+  max: MAX_SIDEBAR_WIDTH,
+  initial: DEFAULT_SIDEBAR_WIDTH,
+};
+const AI_PANEL: PanelLimits = {
+  min: MIN_AI_PANEL_WIDTH,
+  max: MAX_AI_PANEL_WIDTH,
+  initial: DEFAULT_AI_PANEL_WIDTH,
+};
+
+function clampTo(limits: PanelLimits, width: number) {
+  if (!Number.isFinite(width)) return limits.initial;
+  return Math.min(limits.max, Math.max(limits.min, Math.round(width)));
+}
+
 export function clampWidth(width: number) {
-  if (!Number.isFinite(width)) return DEFAULT_SIDEBAR_WIDTH;
-  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+  return clampTo(SIDEBAR, width);
+}
+
+export function clampAiPanelWidth(width: number) {
+  return clampTo(AI_PANEL, width);
 }
 
 /**
- * Drag-to-resize for the right-docked sidebar, with the width persisted
- * across restarts. Tracks the pointer by delta rather than absolute position
- * so the handle stays glued to the cursor regardless of surrounding padding.
+ * How far a drag has widened a panel. A panel docked on the right grows as
+ * the pointer moves left, one docked on the left as it moves right.
  */
-export function useResizableSidebar() {
-  const [storedWidth, setWidth] = usePersistedState("sidebarWidth", DEFAULT_SIDEBAR_WIDTH, {
+export function widthAfterDrag(side: "left" | "right", startWidth: number, startX: number, x: number) {
+  return startWidth + (side === "right" ? startX - x : x - startX);
+}
+
+/**
+ * Drag-to-resize for a docked panel, with the width persisted across
+ * restarts under `storageKey`. Tracks the pointer by delta rather than
+ * absolute position so the handle stays glued to the cursor regardless of
+ * surrounding padding.
+ */
+function useResizablePanel(side: "left" | "right", storageKey: string, limits: PanelLimits) {
+  const [storedWidth, setWidth] = usePersistedState(storageKey, limits.initial, {
     // Every pointermove is a new width; storage only needs the one it stops on.
     debounceMs: PERSIST_DELAY_MS,
   });
   // Held to the limits on the way out of storage as well as while dragging: a
   // width kept by a build whose minimum was narrower would otherwise bring the
-  // sidebar back too narrow for what is in it now.
-  const width = clampWidth(storedWidth);
+  // panel back too narrow for what is in it now.
+  const width = clampTo(limits, storedWidth);
   const [isResizing, setIsResizing] = useState(false);
-  const dragStart = useRef({ x: 0, width: DEFAULT_SIDEBAR_WIDTH });
+  const dragStart = useRef({ x: 0, width: limits.initial });
 
   const startResize = useCallback(
     (event: React.PointerEvent) => {
@@ -48,9 +87,8 @@ export function useResizableSidebar() {
     if (!isResizing) return;
 
     function onPointerMove(event: PointerEvent) {
-      // Docked on the right, so dragging left (a negative delta) widens it.
-      const delta = dragStart.current.x - event.clientX;
-      setWidth(clampWidth(dragStart.current.width + delta));
+      const { x, width } = dragStart.current;
+      setWidth(clampTo(limits, widthAfterDrag(side, width, x, event.clientX)));
     }
 
     function stopResize() {
@@ -65,7 +103,7 @@ export function useResizableSidebar() {
       window.removeEventListener("pointerup", stopResize);
       window.removeEventListener("pointercancel", stopResize);
     };
-  }, [isResizing, setWidth]);
+  }, [isResizing, setWidth, side, limits]);
 
   // Keep the resize cursor while dragging even when the pointer strays off the
   // handle, and stop the drag from selecting editor text on the way past.
@@ -82,7 +120,17 @@ export function useResizableSidebar() {
   }, [isResizing]);
 
   /** Double-click the handle to snap back to the default width. */
-  const resetWidth = useCallback(() => setWidth(DEFAULT_SIDEBAR_WIDTH), [setWidth]);
+  const resetWidth = useCallback(() => setWidth(limits.initial), [setWidth, limits]);
 
   return { width, isResizing, startResize, resetWidth };
+}
+
+/** The file sidebar, docked on the right. */
+export function useResizableSidebar() {
+  return useResizablePanel("right", "sidebarWidth", SIDEBAR);
+}
+
+/** The AI panel, docked on the left, opposite the sidebar. */
+export function useResizableAiPanel() {
+  return useResizablePanel("left", "aiPanelWidth", AI_PANEL);
 }

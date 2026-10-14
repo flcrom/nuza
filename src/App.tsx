@@ -14,6 +14,7 @@ import RecoveredEdits from "./components/RecoveredEdits";
 import SidePane from "./components/SidePane";
 import SplitDropZone from "./components/SplitDropZone";
 import Notices from "./components/Notices";
+import AiPanel, { type AiPanelHandle, type NoteSnapshot } from "./components/AiPanel";
 import ContextMenu from "./components/Sidebar/ContextMenu";
 import { useKeymaps, useKeymapListener } from "./hooks/useKeymaps";
 import { useCloseTabMenu } from "./hooks/useCloseTabMenu";
@@ -36,7 +37,7 @@ import { NO_MODEL_CHOICES, type ModelChoices } from "./lib/ai/modelChoice";
 import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useOutline } from "./hooks/useOutline";
 import { hasEmbeds, refreshEmbeds, setVaultFiles } from "./lib/markdown/embedIndex";
-import { useResizableSidebar } from "./hooks/useResizableSidebar";
+import { useResizableAiPanel, useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
 import { isMainWindow } from "./lib/windowLabel";
 import { addFrontmatter, addProperty, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
@@ -79,10 +80,22 @@ import {
 /** Space between the editor and the sidebar, collapsed with the panel itself. */
 const SIDEBAR_GAP = 12;
 
+/**
+ * Below this window width there is not room for the AI panel, the note and
+ * the file sidebar at once, and opening the panel puts the sidebar away
+ * rather than squeezing the note to nothing.
+ */
+const NARROW_WINDOW = 900;
+
 function App() {
   const [mode, setMode] = useState<string>("normal");
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  /** The pane Settings opens on, when something asks for a particular one. */
+  const [settingsSection, setSettingsSection] = useState<"ai" | undefined>(undefined);
+  // Closed on every launch, like zen mode: it is only ever opened with mod+L,
+  // and an app that came back with it open would be mentioning AI unasked.
+  const [isAiOpen, setIsAiOpen] = useState(false);
   const [isQuickOpenOpen, setIsQuickOpenOpen] = useState(false);
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
   // Off by default: Vim is something you go and turn on, not something a note
@@ -137,6 +150,9 @@ function App() {
   }, [compactMode]);
 
   const sidebarRef = useRef<SidebarHandle>(null);
+  const aiPanelRef = useRef<AiPanelHandle>(null);
+  /** Which pane the AI panel was opened from: its note is the one asked about. */
+  const aiFromSide = useRef(false);
 
   const onFolderOpened = useCallback(
     (path: string) => {
@@ -240,6 +256,12 @@ function App() {
     resetAll: resetAllKeymaps,
   } = useKeymaps();
   const { width: sidebarWidth, isResizing, startResize, resetWidth } = useResizableSidebar();
+  const {
+    width: aiPanelWidth,
+    isResizing: isResizingAiPanel,
+    startResize: startAiPanelResize,
+    resetWidth: resetAiPanelWidth,
+  } = useResizableAiPanel();
   const { notices, dismiss: dismissNotice, hold: noticeHold } = useNotices();
   const { recent: recentFiles, record: recordRecentFile } = useRecentFiles();
 
@@ -529,6 +551,46 @@ function App() {
     });
   }, [returnFocusToEditor]);
   const openSettings = useCallback(() => setIsSettingsOpen(true), []);
+  const openAiSettings = useCallback(() => {
+    setSettingsSection("ai");
+    setIsSettingsOpen(true);
+  }, []);
+
+  /**
+   * Opens the AI panel with the keyboard in it - asking about the note, or
+   * asking for a change to it - or, already open and asked again, closes it
+   * and gives the keyboard back to the note.
+   */
+  const toggleAiPanel = useCallback(
+    (intent: "ask" | "edit") => {
+      if (isAiOpen && !zen && intent === "ask") {
+        setIsAiOpen(false);
+        returnFocusToEditor();
+        return;
+      }
+      aiFromSide.current = !!sideView?.hasFocus;
+      if (zen) setZen(false);
+      if (window.innerWidth < NARROW_WINDOW) setIsSidebarOpen(false);
+      setIsAiOpen(true);
+      aiPanelRef.current?.focusComposer(intent);
+    },
+    [isAiOpen, zen, sideView, returnFocusToEditor]
+  );
+
+  const closeAiPanel = useCallback(() => {
+    setIsAiOpen(false);
+    returnFocusToEditor();
+  }, [returnFocusToEditor]);
+
+  /** The note the AI panel is asking about, as its editor has it right now - unsaved edits and all. */
+  const readAiNote = useCallback((): NoteSnapshot | null => {
+    const fromSide = aiFromSide.current && sideView && sideFile;
+    const view = fromSide ? sideView : editorView;
+    const path = fromSide ? sideFile : currentFile;
+    if (!view) return null;
+    const { from, to } = view.state.selection.main;
+    return { path, text: view.state.doc.toString(), selection: { from, to } };
+  }, [editorView, sideView, sideFile, currentFile]);
   const closeQuickOpen = useCallback(() => setIsQuickOpenOpen(false), []);
   const closeQuickSettings = useCallback(() => {
     setIsQuickSettingsOpen(false);
@@ -594,6 +656,20 @@ function App() {
         enabled: autoUpdateEnabled,
         onToggle: setAutoUpdateEnabled,
       },
+      {
+        id: "ai-panel",
+        title: "AI Panel",
+        description: "The panel for asking your own agent about the note",
+        enabled: isAiOpen,
+        onToggle: (on) => (on ? toggleAiPanel("ask") : closeAiPanel()),
+      },
+      {
+        id: "ai-whole-note",
+        title: "Send the Whole Note to AI",
+        description: "Off sends only the text you select",
+        enabled: aiSendWholeNote,
+        onToggle: setAiSendWholeNote,
+      },
     ],
     [
       vimEnabled,
@@ -611,6 +687,11 @@ function App() {
       setCompactMode,
       autoUpdateEnabled,
       setAutoUpdateEnabled,
+      isAiOpen,
+      toggleAiPanel,
+      closeAiPanel,
+      aiSendWholeNote,
+      setAiSendWholeNote,
     ]
   );
 
@@ -654,6 +735,8 @@ function App() {
         } else toggleSidebar();
       },
       "toggle-zen-mode": () => setZen((on) => !on),
+      "toggle-ai-panel": () => toggleAiPanel("ask"),
+      "ai-edit-selection": () => toggleAiPanel("edit"),
       "save-file": save,
       "open-folder": openFolder,
       "quick-open": () => setIsQuickOpenOpen((open) => !open),
@@ -721,6 +804,7 @@ function App() {
       zen,
       isQuickSettingsOpen,
       closeQuickSettings,
+      toggleAiPanel,
     ]
   );
 
@@ -836,6 +920,37 @@ function App() {
       </div>
 
       <div className="flex-1 min-h-0 px-4 flex w-full relative z-20 print:block print:p-0">
+        {/*
+          The AI panel, docked opposite the sidebar. Mounted from the start and
+          kept that way, so it slides rather than pops and keeps its
+          conversation while closed; at no width and `inert` until mod+L, so
+          a writer who never asks for it never meets it.
+        */}
+        <div
+          className={`h-full shrink-0 overflow-hidden print:hidden ${isResizingAiPanel ? "" : "sidebar-transition"}`}
+          style={{ width: isAiOpen && !zen ? aiPanelWidth + SIDEBAR_GAP : 0 }}
+          inert={!isAiOpen || zen}
+        >
+          <div className="h-full" style={{ width: aiPanelWidth + SIDEBAR_GAP, paddingRight: SIDEBAR_GAP }}>
+            <AiPanel
+              ref={aiPanelRef}
+              isOpen={isAiOpen && !zen}
+              width={aiPanelWidth}
+              isResizing={isResizingAiPanel}
+              onResizeStart={startAiPanelResize}
+              onResizeReset={resetAiPanelWidth}
+              readNote={readAiNote}
+              sendWholeNote={aiSendWholeNote}
+              vaultPath={rootPath}
+              modelChoices={aiModelChoices}
+              setModelChoices={setAiModelChoices}
+              onClose={closeAiPanel}
+              onReturnFocus={returnFocusToEditor}
+              onOpenSettings={openAiSettings}
+            />
+          </div>
+        </div>
+
         {/* The editor sits a shade below the surrounding chrome so the writing
             surface reads as the deepest layer, with the sidebar and the bars
             above it. Tinted rather than filled so window vibrancy still shows
@@ -1031,7 +1146,11 @@ function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={() => {
+          setIsSettingsOpen(false);
+          setSettingsSection(undefined);
+        }}
+        initialSection={settingsSection}
         vimEnabled={vimEnabled}
         setVimEnabled={setVimEnabled}
         showLineNumbers={showLineNumbers}

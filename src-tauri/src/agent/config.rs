@@ -24,6 +24,9 @@ pub(crate) const CODEX_ADAPTER: &str = "@agentclientprotocol/codex-acp@2.2.2";
 /// root-owned folder in a shared `~/.npm` - the usual legacy of an old
 /// `sudo npm install` - makes `npx` fail with an error that reads as nuza's.
 const CLAUDE_NPM_CACHE: &str = "~/.npm/_nuza-claude";
+/// The same for the Codex adapter: a cache that is nuza's alone is also one
+/// nuza can repair after a download was stopped part way (see `start.rs`).
+const CODEX_NPM_CACHE: &str = "~/.npm/_nuza-codex";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -115,6 +118,16 @@ impl AgentConfig {
         matches!(self, AgentConfig::Codex)
     }
 
+    /// The npm cache that is nuza's own, for an agent fetched through `npx`.
+    pub(crate) fn npm_cache(&self, home: Option<&Path>) -> Option<PathBuf> {
+        let cache = match self {
+            AgentConfig::ClaudeCode => CLAUDE_NPM_CACHE,
+            AgentConfig::Codex => CODEX_NPM_CACHE,
+            _ => return None,
+        };
+        home.map(|_| expand_home(cache, home))
+    }
+
     /// How to start it. `home` is the user's home folder, for `~/` and for
     /// the state folders; `None` where there is no such thing.
     pub(crate) fn launch(&self, home: Option<&Path>) -> Result<Launch, String> {
@@ -139,7 +152,12 @@ impl AgentConfig {
             },
             AgentConfig::Codex => Launch {
                 program: "npx".to_string(),
-                args: vec!["-y".to_string(), CODEX_ADAPTER.to_string()],
+                args: vec![
+                    "-y".to_string(),
+                    "--cache".to_string(),
+                    expand(CODEX_NPM_CACHE).to_string_lossy().into_owned(),
+                    CODEX_ADAPTER.to_string(),
+                ],
                 state_dirs: [".npm", ".codex"].into_iter().filter_map(in_home).collect(),
                 state_files: Vec::new(),
                 read_dirs: Vec::new(),
@@ -246,7 +264,13 @@ mod tests {
         );
 
         let codex = AgentConfig::Codex.launch(home()).unwrap();
-        assert_eq!(codex.args, ["-y", CODEX_ADAPTER]);
+        let cache = Path::new("/Users/me").join(".npm/_nuza-codex");
+        assert_eq!(
+            codex.args,
+            ["-y", "--cache", &*cache.to_string_lossy(), CODEX_ADAPTER]
+        );
+        assert_eq!(AgentConfig::Codex.npm_cache(home()), Some(cache));
+        assert_eq!(AgentConfig::OpenCode.npm_cache(home()), None);
 
         let opencode = AgentConfig::OpenCode.launch(home()).unwrap();
         assert_eq!(
