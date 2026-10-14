@@ -13,6 +13,7 @@ import {
   sameAgent,
   splitArgs,
   splitDirs,
+  startingNote,
   type Preset,
   type Readiness,
 } from "@/lib/ai/agents";
@@ -320,6 +321,7 @@ export default function AiSettings({
           ))}
           <CustomAgent current={agent} busy={busy} onUse={(config) => void use(config)} />
         </div>
+        {starting && <p className="mt-1 text-xs text-gray-500">{startingNote(starting)}</p>}
         {error && (
           <p role="alert" className="mt-1 text-xs text-amber-400">
             {error.message}

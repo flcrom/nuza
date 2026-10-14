@@ -19,7 +19,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use super::config::AgentConfig;
 use super::errors::AgentError;
 use super::events::AgentEvent;
-use super::harness::{AgentHarness, Emit, ModelInfo};
+use super::harness::{AgentHarness, Emit, ModelInfo, Question};
 use super::status::{self, Detection};
 use super::store::Store;
 use crate::state::Windows;
@@ -175,11 +175,14 @@ pub(crate) async fn agent_list_models(
 }
 
 /// Asks the agent something in this window's conversation. What it says
-/// arrives on `on_event`, ending with `done` or `failed`.
+/// arrives on `on_event`, ending with `done` or `failed`. `in_full` is the
+/// same question with the note and the rules, for when the agent turns out
+/// not to have the conversation - a new one, or one it lost.
 #[tauri::command]
 pub(crate) async fn agent_prompt(
     window: WebviewWindow,
     text: String,
+    in_full: Option<String>,
     model: Option<String>,
     on_event: Channel<AgentEvent>,
     harness: State<'_, Arc<AgentHarness>>,
@@ -193,7 +196,10 @@ pub(crate) async fn agent_prompt(
         .prompt(
             window.label(),
             vault.as_deref(),
-            &text,
+            Question {
+                text: &text,
+                in_full: in_full.as_deref(),
+            },
             model.as_deref(),
             emit,
         )

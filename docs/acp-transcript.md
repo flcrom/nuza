@@ -10,11 +10,11 @@ and everything the agent printed on stdout read back (`<- `). Long lines are
 cut with `…`; an account's name and email are replaced with `<…>`; the session's
 temporary directory is `<tmp>/session`.
 
-| Agent                    | Started as                                                                        | `initialize` answered after                               |
-| ------------------------ | --------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Claude Code (Claude Pro) | `npx -y --cache ~/.npm/_nuza-claude @agentclientprotocol/claude-agent-acp@0.90.0` | **103 s** cold (npx fetching the adapter), **2.1 s** warm |
-| OpenCode 1.15.13         | `opencode acp`                                                                    | 20 s (its plugins loading)                                |
-| Codex                    | `npx -y @agentclientprotocol/codex-acp@<pin>`                                     | not recorded: no Codex on the recording machine           |
+| Agent                            | Started as                                                                        | `initialize` answered after                               |
+| -------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Claude Code (a paid Claude plan) | `npx -y --cache ~/.npm/_nuza-claude @agentclientprotocol/claude-agent-acp@0.90.0` | **103 s** cold (npx fetching the adapter), **2.1 s** warm |
+| OpenCode 1.15.13                 | `opencode acp`                                                                    | 20 s (its plugins loading)                                |
+| Codex                            | `npx -y @agentclientprotocol/codex-acp@<pin>`                                     | not recorded: no Codex on the recording machine           |
 
 To record again, run the opt-in test, which goes through nuza's own client:
 
@@ -55,7 +55,7 @@ Each of these is a decision made somewhere else in the code, and this is why.
 
 ```
 -> {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"<tmp>/session","mcpServers":[]}}
-<- {"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"account","label":"Claude Pro","account":{"plan":"pro","email":"<email>","organization":"<organization>"}}}}
+<- {"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"account","label":"<plan>","account":{"plan":"<plan>","email":"<email>","organization":"<organization>"}}}}
 <- {"jsonrpc":"2.0","id":2,"result":{"sessionId":"f525628e-…","modes":{"currentModeId":"default","availableModes":[{"id":"default","name":"Manual","description":"Always ask before making changes"},{"id":"acceptEdits","name":"Accept edits","description":"Automatically accept all file edits"},{"id":"plan","name":"Plan","description":"Create a plan before making changes"},{"id":"auto","name":"Auto","description":"Claude handles permission decisions"},{"id":"bypassPermissions","name":"Bypass permissions","description":"Accepts all permissions"}]},"configOptions":[{"id":"mode",…},{"id":"model","name":"Model","description":"AI model to use","category":"model","type":"select","currentValue":"opus","options":[{"value":"default","name":"Default (recommended)","description":"Opus 5.5"},{"value":"opus","name":"Opus 5.5","description":"For complex work and everyday tasks"},{"value":"sonnet","name":"Sonnet 5.5","description":"Most efficient for simpler tasks"},…]}]}}
 -> {"jsonrpc":"2.0","id":3,"method":"session/set_mode","params":{"sessionId":"f525628e-…","modeId":"read-only"}}
 <- {"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal error","data":{"details":"Invalid Mode"}}}

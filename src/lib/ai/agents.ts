@@ -67,6 +67,19 @@ export const PRESETS: Preset[] = [
   },
 ];
 
+/**
+ * What to say while an agent starts. One reached through `npx` downloads
+ * its adapter the first time, which can take minutes on an ordinary
+ * connection, and a "Starting…" that sits there that long reads as broken.
+ */
+export function startingNote(config: AgentConfig | null): string | null {
+  const preset = presetFor(config);
+  if (!preset) return null;
+  return preset.needsNode
+    ? `Starting ${preset.label}. The first time, this downloads its connector, which can take a few minutes.`
+    : `Starting ${preset.label}…`;
+}
+
 /** The preset an agent config is, if it is one. */
 export function presetFor(config: AgentConfig | null): Preset | undefined {
   return config ? PRESETS.find((preset) => preset.config.kind === config.kind) : undefined;

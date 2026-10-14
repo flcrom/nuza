@@ -41,7 +41,9 @@ export type KeymapAction =
   | "heading-none"
   | "go-back"
   | "go-forward"
-  | "toggle-zen-mode";
+  | "toggle-zen-mode"
+  | "toggle-ai-panel"
+  | "ai-edit-selection";
 
 export interface KeymapDefinition {
   id: KeymapAction;
@@ -305,6 +307,19 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     label: "Zen Mode",
     description: "Hide everything but the note, and dim all but the paragraph you are in",
     defaultBinding: "mod+.",
+  },
+  {
+    // mod+l is where people who have used an AI editor already reach.
+    id: "toggle-ai-panel",
+    label: "Ask AI",
+    description: "Open the AI panel, with the selection and the note as context",
+    defaultBinding: "mod+l",
+  },
+  {
+    id: "ai-edit-selection",
+    label: "Edit Selection with AI",
+    description: "Ask for a change to the selected text, straight into the AI panel",
+    defaultBinding: "mod+shift+l",
   },
 ];
 

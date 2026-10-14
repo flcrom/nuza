@@ -52,11 +52,20 @@ pub(crate) async fn detect(path: &OsStr) -> Detection {
         codex_signed_in(codex.as_deref(), path),
     );
 
-    let found = |id, at: Option<PathBuf>, version, signed_in| Found {
-        id,
-        path: at.map(|at| at.to_string_lossy().into_owned()),
-        version,
-        signed_in,
+    // Found means it answered. A program of the right name that does not -
+    // a wrapper script with nothing behind it, a broken install - is not an
+    // agent anyone can use, and offering it would only fail at the first
+    // question.
+    let found = |id, at: Option<PathBuf>, version: Option<String>, signed_in: Option<bool>| {
+        let answered = version.is_some();
+        Found {
+            id,
+            path: at
+                .filter(|_| answered)
+                .map(|at| at.to_string_lossy().into_owned()),
+            version,
+            signed_in: signed_in.filter(|_| answered),
+        }
     };
     Detection {
         node: node_version.filter(|_| npx.is_some()),
@@ -232,6 +241,28 @@ mod tests {
     fn a_program_is_found_without_its_extension() {
         assert!(resolve_command("cmd", &system_path()).is_some());
         assert!(resolve_command("definitely-not-a-real-program-xyz", &system_path()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_program_that_does_not_answer_is_not_an_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // What a wrapper with nothing behind it does.
+        let wrapper = dir.path().join("codex");
+        std::fs::write(&wrapper, "#!/bin/sh\necho 'codex not found' >&2\nexit 1\n").unwrap();
+        let working = dir.path().join("opencode");
+        std::fs::write(&working, "#!/bin/sh\necho 1.15.13\n").unwrap();
+        for program in [&wrapper, &working] {
+            std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let found = detect(dir.path().as_os_str()).await;
+        let codex = found.agents.iter().find(|a| a.id == "codex").unwrap();
+        assert_eq!((codex.path.as_deref(), codex.signed_in), (None, None));
+        let opencode = found.agents.iter().find(|a| a.id == "opencode").unwrap();
+        assert!(opencode.path.is_some());
+        assert_eq!(opencode.version.as_deref(), Some("1.15.13"));
     }
 
     #[test]

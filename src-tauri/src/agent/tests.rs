@@ -874,6 +874,34 @@ async fn deltas_are_coalesced_before_crossing_ipc() {
 }
 
 #[tokio::test]
+async fn a_conversation_the_agent_does_not_have_is_given_everything() {
+    use super::harness::Question;
+    let h = harnessed("claude").await;
+    let asked = || Question {
+        text: "brief SHOW_PROMPT",
+        in_full: Some("full SHOW_PROMPT"),
+    };
+    let turn = || async {
+        let panel = Panel::default();
+        h.harness
+            .prompt("main", None, asked(), None, panel.emit())
+            .await
+            .unwrap();
+        panel.said()
+    };
+
+    // The first question in a conversation goes in full; a follow-up in the
+    // same conversation goes as it is.
+    assert_eq!(turn().await, "full SHOW_PROMPT");
+    assert_eq!(turn().await, "brief SHOW_PROMPT");
+
+    // An agent that restarted has lost the conversation, and is given
+    // everything again.
+    let _ = ask(&h.harness, "main", "CRASH").await;
+    assert_eq!(turn().await, "full SHOW_PROMPT");
+}
+
+#[tokio::test]
 async fn moves_off_a_model_the_account_does_not_offer() {
     // The Codex mock starts every session on a model it does not offer.
     let h = harnessed("codex").await;
@@ -1131,4 +1159,33 @@ async fn real_codex_streams_through_the_harness() {
     println!("OUTCOME: {outcome:?} SAID: {}", panel.said());
     assert!(outcome.is_ok());
     harness.shutdown().await;
+}
+
+/// Opt-in: Claude Code's first start, from an empty npm cache, through the
+/// real fenced command - the adapter is downloaded inside the sandbox. Run
+/// with HOME pointing at an empty folder to make the cache cold.
+#[tokio::test]
+#[ignore]
+async fn real_claude_starts_from_a_cold_cache_inside_the_fence() {
+    let command =
+        tokio::task::spawn_blocking(|| super::start::command_for(&AgentConfig::ClaudeCode))
+            .await
+            .unwrap()
+            .expect("a command for Claude Code");
+    let (sender, _inbound) = mpsc::unbounded_channel();
+    let client = RpcClient::spawn(command, sender, Arc::new(RefuseAll)).unwrap();
+    let started = std::time::Instant::now();
+    let hello = client
+        .request(
+            "initialize",
+            json!({ "protocolVersion": 1, "clientCapabilities": {} }),
+        )
+        .await;
+    println!(
+        "COLD START: {:?} after {:?}",
+        hello.as_ref().map(|_| "answered"),
+        started.elapsed()
+    );
+    assert!(hello.is_ok(), "{hello:?}");
+    client.kill().await;
 }
