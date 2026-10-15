@@ -54,7 +54,9 @@ export function chooseModel(
 function cost(model: ModelInfo): number {
   const name = `${model.id} ${model.name}`.toLowerCase();
   let score = 5;
-  if (/\bfree\b|-free\b|big-pickle/.test(name)) score = 0;
+  // OpenCode Go's models need a Go subscription, "free" in the name or not.
+  if (/^opencode-go\//.test(model.id)) score = 4;
+  else if (/\bfree\b|-free\b|big-pickle/.test(name)) score = 0;
   else if (/\bnano\b|-nano\b/.test(name)) score = 1;
   else if (/haiku|mini|flash|lite|lightning|small/.test(name)) score = 2;
   if (/\[(minimal|none)\]/.test(name)) score -= 0.3;

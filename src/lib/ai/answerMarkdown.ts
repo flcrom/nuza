@@ -53,6 +53,7 @@ export function forDisplay(answer: string): string {
 export type Inline =
   | { type: "text"; text: string }
   | { type: "code"; text: string }
+  | { type: "math"; text: string }
   | { type: "strong"; children: Inline[] }
   | { type: "em"; children: Inline[] }
   | { type: "link"; href: string; children: Inline[] };
@@ -62,7 +63,31 @@ export type Block =
   | { type: "heading"; level: number; children: Inline[] }
   | { type: "code"; language: string; text: string }
   | { type: "quote"; children: Inline[] }
-  | { type: "list"; ordered: boolean; items: Inline[][] };
+  | { type: "list"; ordered: boolean; items: Inline[][] }
+  | { type: "table"; align: ("left" | "center" | "right" | null)[]; header: Inline[][]; rows: Inline[][][] };
+
+/** A table's cells, split on the pipes that are not `\\|`, outer pipes dropped. */
+function cellsOf(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "\\" && line[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (line[i] === "|") {
+      cells.push(cell);
+      cell = "";
+    } else cell += line[i];
+  }
+  cells.push(cell);
+  const trimmed = line.trim();
+  if (trimmed.startsWith("|")) cells.shift();
+  if (trimmed.endsWith("|") && !trimmed.endsWith("\\|")) cells.pop();
+  return cells.map((text) => text.trim());
+}
+
+/** `| --- | :---: |`: the line under a table's header, which makes it one. */
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 
 /**
  * A citation of a note: `nuza:projects/release.md#12` is paragraph 12 of
@@ -98,6 +123,17 @@ export function parseInline(text: string): Inline[] {
   while (i < text.length) {
     const rest = text.slice(i);
     let match: RegExpExecArray | null;
+    // TeX, `$x^2$`, by the editor's rules: no space just inside the dollars,
+    // and no digit straight after - so "it cost $5 and $10" stays prose.
+    if (
+      (match = /^\$(?!\s)([^$\n]*?[^\s$\\])\$(?!\d)/.exec(rest)) ||
+      (match = /^\$([^\s$])\$(?!\d)/.exec(rest))
+    ) {
+      flush();
+      out.push({ type: "math", text: match[1] });
+      i += match[0].length;
+      continue;
+    }
     if ((match = /^`([^`\n]+)`/.exec(rest))) {
       flush();
       out.push({ type: "code", text: match[1] });
@@ -145,6 +181,56 @@ export function parseAnswer(markdown: string): Block[] {
       n += 1;
       while (n < lines.length && !lines[n].trimStart().startsWith(fence[1])) body.push(lines[n++]);
       blocks.push({ type: "code", language: fence[2], text: body.join("\n") });
+      continue;
+    }
+    // A block of TeX, `$$` to `$$`: shown as it is written.
+    if (line.trim().startsWith("$$")) {
+      const rest = line.trim().slice(2);
+      const closesHere = rest.trimEnd().endsWith("$$") && rest.trim().length > 2;
+      const body: string[] = [];
+      if (closesHere) body.push(rest.trimEnd().slice(0, -2));
+      else {
+        if (rest.trim()) body.push(rest);
+        let m = n + 1;
+        while (m < lines.length && !lines[m].trimEnd().endsWith("$$")) body.push(lines[m++]);
+        if (m < lines.length) {
+          const last = lines[m].trimEnd().slice(0, -2);
+          if (last.trim()) body.push(last);
+          endParagraph();
+          blocks.push({ type: "code", language: "tex", text: body.join("\n").trim() });
+          n = m;
+          continue;
+        }
+        // Never closed: an ordinary line after all.
+        paragraph.push(line);
+        continue;
+      }
+      endParagraph();
+      blocks.push({ type: "code", language: "tex", text: body.join("\n").trim() });
+      continue;
+    }
+    // A table: a row of cells, then the rule under it.
+    if (line.includes("|") && TABLE_RULE.test(lines[n + 1] ?? "") && lines[n + 1].includes("-")) {
+      endParagraph();
+      const header = cellsOf(line);
+      const align = cellsOf(lines[n + 1]).map((rule) =>
+        rule.startsWith(":") && rule.endsWith(":")
+          ? "center"
+          : rule.endsWith(":")
+            ? "right"
+            : rule.startsWith(":")
+              ? "left"
+              : null
+      );
+      const rows: Inline[][][] = [];
+      n += 2;
+      while (n < lines.length && lines[n].includes("|") && lines[n].trim() !== "") {
+        const cells = cellsOf(lines[n]);
+        rows.push(header.map((_, column) => parseInline(cells[column] ?? "")));
+        n++;
+      }
+      n--;
+      blocks.push({ type: "table", align, header: header.map((cell) => parseInline(cell)), rows });
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);

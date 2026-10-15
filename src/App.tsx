@@ -592,14 +592,16 @@ function App() {
 
   /**
    * Turns AI on or off. Off closes the panel and stops whatever agent was
-   * running - no process, no port - until it is turned on again.
+   * running - no process, no port - until it is turned on again, which takes
+   * up the same agent without asking again.
    */
   const setAiEnabled = useCallback(
     (enabled: boolean) => {
       setAiEnabledState(enabled);
-      if (enabled) return;
-      setIsAiOpen(false);
-      invoke("agent_turn_off").catch((error) => console.error("Couldn't stop the agent:", error));
+      if (!enabled) setIsAiOpen(false);
+      invoke("agent_set_enabled", { enabled }).catch((error) =>
+        console.error(enabled ? "Couldn't turn AI on:" : "Couldn't stop the agent:", error)
+      );
     },
     [setAiEnabledState]
   );

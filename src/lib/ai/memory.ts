@@ -160,18 +160,50 @@ export function loadThreads(vault: string | null, now = Date.now()): Thread[] {
   return fresh;
 }
 
+/**
+ * Keeps `threads` for `vault`. The webview keeps only a few megabytes for
+ * the whole app: when they will not all fit, the oldest go until the rest
+ * do, rather than nothing being kept at all.
+ */
 export function saveThreads(vault: string | null, threads: Thread[]) {
+  const key = threadsKey(vault);
+  let kept = threads
+    .filter((thread) => thread.turns.length)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_THREADS)
+    .map((thread) => ({ ...thread, turns: thread.turns.slice(-KEPT_TURNS) }));
+  for (;;) {
+    try {
+      if (kept.length) localStorage.setItem(key, JSON.stringify(kept));
+      else localStorage.removeItem(key);
+      return;
+    } catch (error) {
+      if (kept.length <= 1) {
+        console.error("Couldn't keep the AI threads:", error);
+        return;
+      }
+      kept = kept.slice(0, Math.ceil(kept.length / 2));
+    }
+  }
+}
+
+/**
+ * Clears out every vault's threads that have gone a week untouched - not
+ * only the vault open now, so a folder never opened again does not keep its
+ * chats for ever.
+ */
+export function pruneAllThreads(now = Date.now()) {
+  let keys: string[];
   try {
-    const key = threadsKey(vault);
-    const kept = threads
-      .filter((thread) => thread.turns.length)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, MAX_THREADS)
-      .map((thread) => ({ ...thread, turns: thread.turns.slice(-KEPT_TURNS) }));
-    if (kept.length) localStorage.setItem(key, JSON.stringify(kept));
-    else localStorage.removeItem(key);
-  } catch (error) {
-    console.error("Couldn't keep the AI threads:", error);
+    keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index) ?? "").filter(
+      (key) => key.startsWith("nuza:ai-threads:")
+    );
+  } catch {
+    return;
+  }
+  for (const key of keys) {
+    const vault = key.slice("nuza:ai-threads:".length);
+    loadThreads(vault === NO_VAULT ? null : vault, now);
   }
 }
 

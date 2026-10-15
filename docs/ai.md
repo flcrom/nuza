@@ -58,7 +58,16 @@ only. You can clear the conversation in Settings at any time.
 ## What it cannot do
 
 Changes to a note come back as **suggestions** that you accept or reject one by
-one. Accepting one is an ordinary edit, and ⌘Z undoes it.
+one. Accepting one is an ordinary edit, and ⌘Z undoes it. A **new note** you ask
+for comes back the same way: a card showing where it would go and what it
+says, made only when you press **Create**, and never over a note that is
+already there. The agent links it both ways with `[[wiki links]]`, so each
+note shows up in the other's backlinks.
+
+The agent is told it is there for your notes and your writing, and to turn
+anything else down in a sentence. That is an instruction to the model, not a
+lock: it keeps the panel on topic, but a determined request can still get an
+answer it shouldn't. What the agent can _do_, as below, is enforced by nuza.
 
 Every time the agent asks to run a command, write or delete a file, or look
 something up on the web, nuza says no, and says so in the panel. Web lookups

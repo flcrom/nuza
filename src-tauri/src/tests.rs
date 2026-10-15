@@ -1525,6 +1525,46 @@ mod windows {
             .is_err());
     }
 
+    /// A note the AI panel makes: inside the vault, folders and all, never
+    /// over one already there, and said where it is the way the tree says it.
+    #[test]
+    fn a_new_note_is_made_inside_the_vault_and_never_over_another() {
+        let (_app, first, _second) = two_windows();
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        adopt_folder(&first, folder.clone()).unwrap();
+        let make = |path: &str, content: &str| {
+            tauri::async_runtime::block_on(crate::files::create_note(
+                first.clone(),
+                path.to_string(),
+                content.to_string(),
+            ))
+        };
+
+        let made = make("ideas/launch", "# Launch\n\nSee [[release]].\n").unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(&made),
+            std::path::PathBuf::from(&folder)
+                .join("ideas")
+                .join("launch.md")
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("ideas/launch.md")).unwrap(),
+            "# Launch\n\nSee [[release]].\n"
+        );
+
+        // Never over a note already there.
+        assert!(make("ideas/launch.md", "something else").is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("ideas/launch.md")).unwrap(),
+            "# Launch\n\nSee [[release]].\n"
+        );
+
+        // Nowhere outside.
+        assert!(make("../outside.md", "x").is_err());
+        assert!(!dir.path().parent().unwrap().join("outside.md").exists());
+    }
+
     /// A switch to a folder that cannot be read leaves the window on the one
     /// it had. The boundary used to move before the listing was attempted, so
     /// a failure here left the window rooted on a folder the frontend was not

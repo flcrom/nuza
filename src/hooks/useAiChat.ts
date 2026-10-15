@@ -9,7 +9,9 @@ import {
   type Scope,
   afterRetry,
   againstLiveNote,
+  editsIn,
   hasEditsBlock,
+  newNotesIn,
   parseProposals,
   proseOf,
   retryRequest,
@@ -22,6 +24,7 @@ import {
   keepThread,
   loadThreads,
   newThreadId,
+  pruneAllThreads,
   titleFor,
   type SavedTurn,
   type Thread,
@@ -77,6 +80,18 @@ export interface TurnEdits {
   problem: string | null;
 }
 
+/** A new note the agent suggested, and what became of it. */
+export interface NoteCard {
+  id: string;
+  /** Where it would go in the vault. */
+  path: string;
+  content: string;
+  why: string;
+  status: "pending" | "created" | "discarded" | "failed";
+  /** Why it could not be made, when it could not. */
+  error: string | null;
+}
+
 export interface ChatTurn {
   id: number;
   /** What the agent was asked: the writer's words, or an action's request. */
@@ -92,6 +107,8 @@ export interface ChatTurn {
   context: AiContext | null;
   answer: Answer;
   edits: TurnEdits | null;
+  /** New notes it suggested, to be made only once the writer says so. */
+  notes?: NoteCard[] | null;
   /** When it was asked, and how long the answer took once it came. */
   startedAt: number;
   took: number | null;
@@ -233,8 +250,10 @@ export function useAiChat(agent: string, access: NoteAccess) {
     setTurns(turns);
   }, []);
 
-  // The vault's threads, with the latest open as it was left.
+  // The vault's threads, with the latest open as it was left - and every
+  // vault's week-old ones cleared out on the way.
   useEffect(() => {
+    pruneAllThreads();
     const kept = loadThreads(vault);
     setThreads(kept);
     open(kept[0] ?? null);
@@ -375,6 +394,10 @@ export function useAiChat(agent: string, access: NoteAccess) {
     ) => {
       const text = answerText(answer);
       if (!hasEditsBlock(text)) return;
+      // Only new notes in the block: nothing to draw over this one, and the
+      // edits waiting from earlier stay as they are.
+      const read = editsIn(text);
+      if (read.ok && read.edits.length === 0) return;
       update(id, (turn) => ({
         ...turn,
         edits: { path, selected, cards: [], aligning: false, shown: false, problem: null },
@@ -486,6 +509,19 @@ export function useAiChat(agent: string, access: NoteAccess) {
         update(id, (turn) => ({ ...turn, answer: turn.answer.state === "failed" ? turn.answer : answer }));
         return;
       }
+      // New notes it suggested, with or without a note open.
+      const suggested = answer.state === "done" ? newNotesIn(answerText(answer)) : [];
+      if (suggested.length) {
+        update(id, (turn) => ({
+          ...turn,
+          notes: suggested.map((note, index) => ({
+            id: `note-${id}-${index}`,
+            ...note,
+            status: "pending" as const,
+            error: null,
+          })),
+        }));
+      }
       if (answer.state === "done" && context && path)
         await settle(id, path, context, answer, model, selected);
     },
@@ -545,5 +581,27 @@ export function useAiChat(agent: string, access: NoteAccess) {
     [newChat, threadId, vault]
   );
 
-  return { turns, running, ask, show, stop, newChat, threads, threadId, openThread, deleteThread };
+  /** What became of a suggested note. */
+  const markNote = useCallback(
+    (turnId: number, noteId: string, status: NoteCard["status"], error: string | null = null) =>
+      update(turnId, (turn) => ({
+        ...turn,
+        notes: turn.notes?.map((note) => (note.id === noteId ? { ...note, status, error } : note)) ?? null,
+      })),
+    [update]
+  );
+
+  return {
+    turns,
+    running,
+    ask,
+    show,
+    stop,
+    newChat,
+    threads,
+    threadId,
+    openThread,
+    deleteThread,
+    markNote,
+  };
 }

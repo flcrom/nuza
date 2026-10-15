@@ -47,12 +47,24 @@
 //   PROPOSE_BADLY   the same, but with an anchor that is not in the note -
 //                   which it fixes when asked again ("could not be applied")
 
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import readline from "node:readline";
 
 const flavor = process.argv.includes("--flavor")
   ? process.argv[process.argv.indexOf("--flavor") + 1]
   : "codex";
+
+// --spawn-child FILE: starts a process of its own that would outlive the
+// mock, and writes its id to FILE - for checking that stopping an agent
+// stops what it started, as `npx` starts the adapter.
+if (process.argv.includes("--spawn-child")) {
+  const file = process.argv[process.argv.indexOf("--spawn-child") + 1];
+  const child = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  fs.writeFileSync(file, String(child.pid));
+}
 
 const MODES = {
   codex: { current: "auto", available: ["read-only", "auto", "full-access"] },
@@ -96,10 +108,17 @@ function askClient(method, params) {
   });
 }
 
-const OFFERED = flavor === "codex" ? ["current[low]", "backup[low]"] : ["sonnet", "haiku"];
+// "subscription": a plan with a provider whose models all need a subscription
+// it does not have, as OpenCode's Go models do.
+const OFFERED =
+  flavor === "codex"
+    ? ["current[low]", "backup[low]"]
+    : flavor === "subscription"
+      ? ["go/alpha", "go/beta", "zen/pickle"]
+      : ["sonnet", "haiku"];
 
 function modelsOf(session) {
-  if (flavor === "codex") {
+  if (flavor === "codex" || flavor === "subscription") {
     return {
       models: {
         currentModelId: session.model,
@@ -186,6 +205,32 @@ function answerAbout(note) {
   return parts.join("\n\n");
 }
 
+/**
+ * A new note, linked both ways: it links back to the note asked about, and an
+ * edit links that note to it - what a real agent is told to do.
+ */
+function suggestNote(text) {
+  const title = /The note: (.+)/.exec(text)?.[1]?.replace(/\.md$/, "").trim();
+  const note = noteIn(text);
+  const firstLine = note?.split("\n").find((line) => line.trim() && !line.startsWith("---"));
+  const entries = [
+    {
+      create: "Stand-in note.md",
+      content: `---\ntags: [draft]\n---\n# Stand-in note\n\nA placeholder from nuza's stand-in agent${title ? `, made from [[${title}]]` : ""}.\n\n| Column | Value |\n| --- | --- |\n| one | $x^2$ |\n`,
+      why: "A stand-in's new note, to try making one.",
+    },
+  ];
+  if (firstLine) {
+    const anchor = firstLine.replace(/⟦\/?selection⟧/g, "");
+    entries.push({
+      find: anchor,
+      replace: `${anchor} See [[Stand-in note]].`,
+      why: "Links this note to the new one.",
+    });
+  }
+  return `Here's a new note - nuza's stand-in agent, so it's only a placeholder.\n\n${editsBlock(entries)}`;
+}
+
 /** An edit to what was selected - or, with nothing selected, to the note's first sentences. */
 function suggestChange(note) {
   if (!note) return "There's no note text to change here.";
@@ -244,10 +289,14 @@ async function prompt(id, { sessionId, prompt: parts }) {
     /\b(rephrase|reword|rewrite|improve|proofread|fix|shorten|tighten|simplify|synonym)\b/i.test(
       text.split("Their question:").at(-1) ?? ""
     );
+  const question = text.split(/Their question:|The change they want[^\n]*:/).at(-1) ?? "";
+  const wantsNote = /\b(new|another|separate) note\b|\bcreate (a )?note\b/i.test(question);
   let reply = asked
-    ? wantsChange
-      ? suggestChange(noteIn(text) ?? session.note ?? null)
-      : answerAbout(noteIn(text) ?? session.note ?? null)
+    ? wantsNote
+      ? suggestNote(text)
+      : wantsChange
+        ? suggestChange(noteIn(text) ?? session.note ?? null)
+        : answerAbout(noteIn(text) ?? session.note ?? null)
     : `You said: ${text}`;
 
   if (text.includes("STALL")) return void stalled.set(sessionId, id);
@@ -357,6 +406,13 @@ async function prompt(id, { sessionId, prompt: parts }) {
     return fail(id, `The '${name}' model is not supported when using Codex with a ChatGPT account.`);
   }
 
+  // Refused without naming the model, as OpenCode does.
+  if (flavor === "subscription" && session.model.startsWith("go/"))
+    return fail(
+      id,
+      "Upstream request failed: An active OpenCode Go subscription is required to use Go models."
+    );
+
   if (text.includes("SHOW_MODEL")) reply = `model ${session.model}`;
   if (text.includes("WHICH_MODE")) reply = `mode ${session.mode}`;
   if (text.includes("SHOW_MCP")) reply = `mcp ${JSON.stringify(session.mcpServers)}`;
@@ -436,7 +492,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       const sessionId = `mock-session-${++sessionCounter}`;
       const session = {
         mode: MODES[flavor]?.current ?? "none",
-        model: flavor === "codex" ? "retired[low]" : "sonnet",
+        model: flavor === "codex" ? "retired[low]" : flavor === "subscription" ? "go/alpha" : "sonnet",
         mcpServers: params.mcpServers,
         cwd: params.cwd,
       };

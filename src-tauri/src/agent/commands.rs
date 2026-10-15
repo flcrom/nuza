@@ -174,6 +174,25 @@ pub(crate) async fn agent_turn_off(
     Ok(())
 }
 
+/// AI turned off or on in Settings. Off stops the agent and the vault tools -
+/// no process, no port - but keeps which agent was chosen, so turning AI on
+/// again picks up where it was without asking again.
+#[tauri::command]
+pub(crate) async fn agent_set_enabled(
+    enabled: bool,
+    harness: State<'_, Arc<AgentHarness>>,
+    tools: State<'_, Arc<super::tools::AppVaultTools>>,
+    store: State<'_, Store>,
+) -> Result<(), String> {
+    if enabled {
+        harness.restore(store.get().agent);
+    } else {
+        harness.set_agent(None).await;
+        tools.stop();
+    }
+    Ok(())
+}
+
 /// Starts the agent ahead of the first question.
 #[tauri::command]
 pub(crate) async fn agent_warm(harness: State<'_, Arc<AgentHarness>>) -> Result<(), AgentError> {

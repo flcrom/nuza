@@ -205,7 +205,35 @@ fn kill_group(child: &mut Child) {
     }
 }
 
-#[cfg(not(unix))]
+/// On Windows there are no process groups: the agent's whole tree - `npx`'s
+/// `cmd.exe`, the Node under it, the adapter, the agent - is ended by
+/// `taskkill /T`, from System32 by its full path, so nothing on `PATH` can
+/// stand in for it. Only before the agent has been reaped, for the same
+/// reason as on Unix.
+#[cfg(windows)]
+fn kill_group(child: &mut Child) {
+    if !matches!(child.try_wait(), Ok(None)) {
+        return;
+    }
+    let Some(pid) = child.id() else {
+        return;
+    };
+    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let mut taskkill = std::process::Command::new(
+        std::path::Path::new(&system)
+            .join("System32")
+            .join("taskkill.exe"),
+    );
+    taskkill
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    super::start::no_window_std(&mut taskkill);
+    let _ = taskkill.status();
+}
+
+#[cfg(not(any(unix, windows)))]
 fn kill_group(_: &mut Child) {}
 
 async fn write_line(stdin: &AsyncMutex<ChildStdin>, message: &Value) -> std::io::Result<()> {

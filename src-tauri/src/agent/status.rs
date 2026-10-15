@@ -84,6 +84,8 @@ async fn version_of(program: Option<&Path>, path: &OsStr) -> Option<String> {
         .arg("--version")
         .env("PATH", path)
         .kill_on_drop(true);
+    super::start::no_window(&mut command);
+    super::start::leave_appimage(&mut command);
     let output = tokio::time::timeout(PATIENCE, command.output())
         .await
         .ok()?
@@ -105,6 +107,8 @@ async fn codex_signed_in(codex: Option<&Path>, path: &OsStr) -> Option<bool> {
         .args(["login", "status"])
         .env("PATH", path)
         .kill_on_drop(true);
+    super::start::no_window(&mut command);
+    super::start::leave_appimage(&mut command);
     let output = tokio::time::timeout(PATIENCE, command.output())
         .await
         .ok()?
@@ -128,15 +132,23 @@ fn read_login_status(success: bool, stdout: &str, stderr: &str) -> bool {
 /// the checklist looks again a little later, and nuza never sees a token.
 pub(crate) fn codex_login(path: &OsStr) -> Result<(), String> {
     let codex = resolve_command("codex", path).ok_or("Codex is not installed")?;
-    std::process::Command::new(codex)
+    let mut command = std::process::Command::new(codex);
+    command
         .args(["login"])
         .env("PATH", path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    super::start::no_window_std(&mut command);
+    super::start::leave_appimage_std(&mut command);
+    let mut child = command
         .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("could not start `codex login`: {error}"))
+        .map_err(|error| format!("could not start `codex login`: {error}"))?;
+    // Waited on out of the way, so it is not left behind once it finishes.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Where `command` is, found the way a shell would: as it is when it has a

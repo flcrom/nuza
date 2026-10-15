@@ -13,6 +13,7 @@ import {
   forgetThread,
   keepThread,
   loadThreads,
+  pruneAllThreads,
   saveThreads,
   titleFor,
   type SavedTurn,
@@ -159,6 +160,29 @@ describe("chat threads, kept per vault", () => {
 
   test("a thread with nothing in it is not kept", () => {
     expect(keepThread("/notes", { ...thread("empty", 0), turns: [] }, now)).toEqual([]);
+  });
+
+  test("every vault's week-old threads are cleared, not only the one open", () => {
+    saveThreads("/never-again", [thread("old", THREAD_DAYS + 2)]);
+    saveThreads("/notes", [thread("new", 1)]);
+    pruneAllThreads(now);
+    expect(localStorage.getItem("nuza:ai-threads:/never-again")).toBeNull();
+    expect(loadThreads("/notes", now)).toHaveLength(1);
+  });
+
+  test("when they will not all fit, the newest are kept", () => {
+    const real = localStorage.setItem;
+    // Room for two threads and no more.
+    localStorage.setItem = (key: string, value: string) => {
+      if ((JSON.parse(value) as unknown[]).length > 2) throw new Error("QuotaExceededError");
+      real.call(localStorage, key, value);
+    };
+    try {
+      saveThreads("/notes", [thread("a", 4), thread("b", 3), thread("c", 2), thread("d", 1)]);
+    } finally {
+      localStorage.setItem = real;
+    }
+    expect(loadThreads("/notes", now).map((kept) => kept.id)).toEqual(["d", "c"]);
   });
 
   test("one can be deleted", () => {
