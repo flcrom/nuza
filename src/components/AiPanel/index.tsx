@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { ArrowUp, RotateCcw, Square, X } from "lucide-react";
+import { BookOpen, PenLine, Replace, RotateCcw, ScanText, SpellCheck, Sparkles, X } from "lucide-react";
 import { cn } from "cn";
 import { useAgent } from "@/hooks/useAgent";
 import { useAiChat, type ChatTurn } from "@/hooks/useAiChat";
@@ -25,6 +25,16 @@ import { CitationContext, type Citations } from "./citations";
 import { invoke } from "@tauri-apps/api/core";
 import { report } from "@/lib/notices";
 import TurnView from "./TurnView";
+import Composer, { type ComposerHandle } from "./Composer";
+import {
+  ACTIONS,
+  canRun,
+  parseCommand,
+  requestFor,
+  wordAt,
+  type ActionId,
+  type WritingAction,
+} from "@/lib/ai/actions";
 
 /** The note a question is about, as the editor has it right now. */
 export interface NoteSnapshot {
@@ -59,7 +69,21 @@ interface AiPanelProps {
   onClose: () => void;
   onReturnFocus: () => void;
   onOpenSettings: () => void;
+  /** How the writer likes replies, in their own words. */
+  instructions: string;
+  /** What the writer asked the AI to keep in mind in this vault. */
+  memory: string[];
+  onRemember: (item: string) => void;
 }
+
+const CHIP_ICONS: Partial<Record<ActionId, typeof Sparkles>> = {
+  rephrase: Replace,
+  synonym: ScanText,
+  "explain-selection": BookOpen,
+  "explain-note": BookOpen,
+  proofread: SpellCheck,
+  improve: PenLine,
+};
 
 /**
  * Keys the panel answers itself, and the window's shortcuts leave alone while
@@ -108,19 +132,31 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
     viewFor,
     openNote,
     openAt,
+    instructions,
+    memory,
+    onRemember,
   },
   ref
 ) {
   const agent = useAgent();
   const label = agent.state?.label ?? "the agent";
-  const chat = useAiChat(label, { viewFor });
+  const chat = useAiChat(label, { viewFor, vault: vaultPath });
   const config = agent.state?.agent ?? null;
 
   const [question, setQuestion] = useState("");
   const [intent, setIntent] = useState<Intent>("ask");
   const [prepared, setPrepared] = useState<Prepared>({ ok: true, context: null });
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const composer = useRef<HTMLTextAreaElement>(null);
+  const composer = useRef<ComposerHandle>(null);
+  /** What there is to act on: a selection, or at least a word at the caret. */
+  const [selection, setSelection] = useState({ selected: false, onWord: false });
+  /** A line from the panel itself, that goes again after a moment. */
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const timer = window.setTimeout(() => setFlash(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
   const scroller = useRef<HTMLDivElement>(null);
 
   /** Looks at the note again, for the chips. */
@@ -129,6 +165,9 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
     const note = readNote();
     setPrepared(prepare(note, sendWholeNote));
     setNotePath(note?.path ?? null);
+    const selected = !!note && note.selection.to > note.selection.from;
+    const onWord = !!note && !selected && !!wordAt(note.text, note.selection.from);
+    setSelection({ selected, onWord });
   }, [readNote, sendWholeNote]);
 
   useImperativeHandle(
@@ -176,36 +215,83 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
 
   const model = modelFor(modelChoices, config, vaultPath);
 
-  const send = useCallback(
-    (text: string, as: Intent) => {
-      const asked = text.trim();
-      if (!asked || chat.running || !config) return;
-      const now = prepare(readNote(), sendWholeNote);
+  /** Asks the agent `question`, about the note as it is now - or as `note` says it is. */
+  const ask = useCallback(
+    (question: string, shown: { text: string; action: string | null }, as: Intent, note = readNote()) => {
+      if (chat.running || !config) return;
+      const now = prepare(note, sendWholeNote);
       setPrepared(now);
       if (!now.ok) return;
       setQuestion("");
+      const context = now.context;
+      let lines: string | null = null;
+      if (context?.selection) {
+        const [first, last] = selectionLines(context.note, context.selection);
+        lines = first === last ? `L${first}` : `L${first}-${last}`;
+      }
       void chat.ask({
-        question: asked,
-        path: readNote()?.path ?? null,
-        context: now.context,
+        question,
+        text: shown.text,
+        action: shown.action,
+        about: context ? { title: context.title, lines } : null,
+        instructions,
+        memory,
+        path: note?.path ?? null,
+        context,
         intent: as,
         model,
       });
     },
-    [chat, config, readNote, sendWholeNote, model]
+    [chat, config, readNote, sendWholeNote, model, instructions, memory]
   );
 
-  const retry = useCallback((turn: ChatTurn) => send(turn.question, turn.intent), [send]);
+  /** Runs a writing action on what is selected - or, for a synonym, the word at the caret. */
+  const run = useCallback(
+    (action: WritingAction, rest: string) => {
+      if (action.id === "remember") {
+        if (!rest) {
+          setFlash("Type what to remember after /remember.");
+          return;
+        }
+        onRemember(rest);
+        setQuestion("");
+        setFlash("Remembered. It goes with every question in this vault.");
+        return;
+      }
+      let note = readNote();
+      let selected = !!note && note.selection.to > note.selection.from;
+      if (note && !selected && action.needs === "word") {
+        const word = wordAt(note.text, note.selection.from);
+        if (word) {
+          note = { ...note, selection: word };
+          selected = true;
+        }
+      }
+      if (!canRun(action, selected, false)) {
+        setFlash(action.needs === "word" ? "Put the caret on a word first." : "Select some text first.");
+        return;
+      }
+      ask(requestFor(action, selected, rest), { text: rest, action: action.label }, action.intent, note);
+    },
+    [ask, onRemember, readNote]
+  );
 
-  const onComposerKey = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      send(question, intent);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onReturnFocus();
-    }
-  };
+  /** Sends what was typed: a writing action when it starts with one, a question otherwise. */
+  const send = useCallback(
+    (text: string) => {
+      const asked = text.trim();
+      if (!asked) return;
+      const command = parseCommand(asked);
+      if (command) run(command.action, command.rest);
+      else ask(asked, { text: asked, action: null }, intent);
+    },
+    [ask, run, intent]
+  );
+
+  const retry = useCallback(
+    (turn: ChatTurn) => ask(turn.question, { text: turn.text, action: turn.action }, turn.intent),
+    [ask]
+  );
 
   // mod+. anywhere in the panel stops the answer.
   /** The note a turn's edits are over, when it is in an editor. */
@@ -281,14 +367,6 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
       decide(waiting, null, pressed(ACCEPT_ALL_KEY));
     }
   };
-
-  // The composer grows with what is typed, up to a point.
-  useEffect(() => {
-    const box = composer.current;
-    if (!box) return;
-    box.style.height = "auto";
-    box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
-  }, [question]);
 
   /** The note the next question carries, and how much the edits waiting over it change. */
   const files = useMemo<ContextFile[]>(() => {
@@ -396,11 +474,36 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
           <>
             <div ref={scroller} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-3">
               {chat.turns.length === 0 && (
-                <p className="text-xs leading-relaxed text-gray-500">
-                  {intent === "edit"
-                    ? `Say what to change, and ${label} will suggest it.`
-                    : `Ask ${label} about this note${files[0]?.detail?.startsWith("line") ? ", or the part you selected" : ""}.`}
-                </p>
+                <div className="animate-ai-in space-y-3 pt-2">
+                  <p className="text-[13px] text-gray-300">
+                    {intent === "edit" ? "What should change?" : "What can I help with?"}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ACTIONS.filter(
+                      (action) =>
+                        action.id !== "remember" && canRun(action, selection.selected, selection.onWord)
+                    )
+                      .filter((action) => (selection.selected ? action.id !== "explain-note" : true))
+                      .map((action) => {
+                        const Icon = CHIP_ICONS[action.id] ?? Sparkles;
+                        return (
+                          <button
+                            key={action.id}
+                            type="button"
+                            title={action.hint}
+                            onClick={() => run(action, "")}
+                            className="flex cursor-pointer items-center gap-1.5 rounded-full border border-zinc-700/80 bg-zinc-800/40 px-2.5 py-1 text-xs text-gray-300 transition-colors hover:border-[var(--nuza-accent)] hover:text-white"
+                          >
+                            <Icon size={12} aria-hidden />
+                            {action.label}
+                          </button>
+                        );
+                      })}
+                  </div>
+                  <p className="text-[11px] text-gray-600">
+                    {selection.selected ? "These work on what you selected. " : ""}Type / for every action.
+                  </p>
+                </div>
               )}
               {chat.turns.map((turn) => (
                 <TurnView
@@ -439,60 +542,25 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
                 onReview={() => reviewTarget && focus(reviewTarget.turn, reviewTarget.card)}
                 notice={cannotSearch}
               />
-              <div className="rounded-md border border-zinc-700 bg-zinc-900/70 focus-within:border-[var(--nuza-accent)]">
-                <textarea
-                  ref={composer}
-                  value={question}
-                  rows={2}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  onKeyDown={onComposerKey}
-                  onFocus={look}
-                  placeholder={intent === "edit" ? "Describe the change…" : "Ask about this note…"}
-                  aria-label={intent === "edit" ? "The change you want" : "Your question"}
-                  className="block w-full resize-none bg-transparent px-2 pt-2 text-sm text-white outline-none placeholder:text-gray-600"
-                />
-                <div className="flex items-center justify-between gap-2 px-2 pb-1.5">
-                  {models.length > 0 ? (
-                    <select
-                      value={model ?? ""}
-                      onChange={(event) =>
-                        setModelChoices(
-                          chooseModel(modelChoices, config, vaultPath, event.target.value || null)
-                        )
-                      }
-                      aria-label="Model"
-                      className="min-w-0 max-w-[60%] cursor-pointer truncate bg-transparent text-xs text-gray-500 outline-none hover:text-gray-300"
-                    >
-                      <option value="">Default model</option>
-                      {models.map((offered) => (
-                        <option key={offered.id} value={offered.id}>
-                          {offered.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span />
-                  )}
-                  <div className="flex items-center gap-2">
-                    {used !== null && <span className="text-[11px] text-gray-600">{used}% context</span>}
-                    <button
-                      type="button"
-                      onClick={chat.running ? chat.stop : () => send(question, intent)}
-                      disabled={!chat.running && !question.trim()}
-                      title={chat.running ? "Stop" : "Send"}
-                      aria-label={chat.running ? "Stop the answer" : "Send"}
-                      className={cn(
-                        "flex size-6 cursor-pointer items-center justify-center rounded-md transition-colors disabled:cursor-default disabled:opacity-40",
-                        chat.running
-                          ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                          : "bg-[var(--nuza-accent)] text-black hover:bg-[var(--nuza-accent-strong)]"
-                      )}
-                    >
-                      {chat.running ? <Square size={10} fill="currentColor" /> : <ArrowUp size={13} />}
-                    </button>
-                  </div>
-                </div>
-              </div>
+              {flash && <p className="animate-ai-in px-1 pb-1.5 text-xs text-gray-400">{flash}</p>}
+              <Composer
+                ref={composer}
+                value={question}
+                onChange={setQuestion}
+                onSend={send}
+                onStop={chat.stop}
+                onAction={run}
+                onEscape={onReturnFocus}
+                onFocus={look}
+                running={chat.running}
+                intent={intent}
+                selected={selection.selected}
+                onWord={selection.onWord}
+                models={models}
+                model={model}
+                onModel={(chosen) => setModelChoices(chooseModel(modelChoices, config, vaultPath, chosen))}
+                used={used}
+              />
             </div>
           </>
         )}

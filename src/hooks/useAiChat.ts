@@ -10,10 +10,12 @@ import {
   againstLiveNote,
   hasEditsBlock,
   parseProposals,
+  proseOf,
   retryRequest,
   type Proposal,
 } from "@/lib/ai/proposals";
 import { applyEvent, answerText, emptyAnswer, type Answer } from "@/lib/ai/transcript";
+import { CONVERSATION_CLEARED, loadConversation, saveConversation, type SavedTurn } from "@/lib/ai/memory";
 import { PROPOSAL_EVENT, setProposals, type ProposalEventDetail } from "@/lib/markdown/aiDiff";
 
 /**
@@ -44,16 +46,32 @@ export interface TurnEdits {
 
 export interface ChatTurn {
   id: number;
+  /** What the agent was asked: the writer's words, or an action's request. */
   question: string;
+  /** What the writer's message shows: what they typed. */
+  text: string;
+  /** The writing action it was, if it was one. */
+  action: string | null;
+  /** The note it is about, for the chip on the message. */
+  about: { title: string; lines: string | null } | null;
   intent: Intent;
   /** What was sent about the note with this question, if anything. */
   context: AiContext | null;
   answer: Answer;
   edits: TurnEdits | null;
+  /** When it was asked, and how long the answer took once it came. */
+  startedAt: number;
+  took: number | null;
 }
 
 export interface AskInput {
   question: string;
+  text: string;
+  action: string | null;
+  about: ChatTurn["about"];
+  /** The writer's own instructions, and what they asked to be remembered. */
+  instructions: string;
+  memory: string[];
   /** The note the question is about, for its edits to go over. */
   path: string | null;
   context: AiContext | null;
@@ -64,6 +82,45 @@ export interface AskInput {
 export interface NoteAccess {
   /** The editor showing the note at `path`, if one is. */
   viewFor: (path: string) => EditorView | null;
+  /** The vault the conversation is kept for. */
+  vault: string | null;
+}
+
+/** A kept turn, back as one the panel can show. */
+function restored(saved: SavedTurn, id: number): ChatTurn {
+  const answer = {
+    ...emptyAnswer(),
+    parts: saved.answer ? [{ type: "text" as const, text: saved.answer }] : [],
+    state: saved.failed ? ("failed" as const) : ("done" as const),
+    stopReason: saved.failed ? null : "end_turn",
+    error: saved.failed ? { code: "other" as const, message: saved.failed } : null,
+  };
+  return {
+    id,
+    question: saved.request,
+    text: saved.text,
+    action: saved.action,
+    about: saved.about,
+    intent: "ask",
+    context: null,
+    answer,
+    edits: null,
+    startedAt: 0,
+    took: saved.took,
+  };
+}
+
+/** A finished turn, as it is kept. */
+function kept(turn: ChatTurn): SavedTurn {
+  return {
+    request: turn.question,
+    text: turn.text,
+    action: turn.action,
+    about: turn.about,
+    answer: proseOf(answerText(turn.answer)),
+    failed: turn.answer.state === "failed" ? (turn.answer.error?.message ?? "It didn't answer.") : null,
+    took: turn.took,
+  };
 }
 
 const PROBLEMS: Record<string, string> = {
@@ -102,12 +159,15 @@ async function prompt(
 
 /**
  * One window's conversation with its agent: the turns so far, the one in
- * flight, the edits each answer proposed, and stopping it. Held only in
- * memory - nuza keeps no record of what was asked once the window has gone.
+ * flight, the edits each answer proposed, and stopping it. The conversation
+ * is kept per vault, on this computer, so it is there after a restart - and
+ * so a fresh session of the agent can be told what was said.
  */
 export function useAiChat(agent: string, access: NoteAccess) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const nextId = useRef(0);
+  const vault = access.vault;
+
   const notes = useRef(access);
   notes.current = access;
   /**
@@ -119,6 +179,37 @@ export function useAiChat(agent: string, access: NoteAccess) {
   /** Edits turned down since the last question, to be mentioned in the next. */
   const declined = useRef<{ find: string; replace: string }[]>([]);
   const cards = useRef(new Map<string, EditCard>());
+
+  // The vault's conversation, back as it was left.
+  useEffect(() => {
+    const saved = loadConversation(vault);
+    setTurns(saved.map((turn) => restored(turn, ++nextId.current)));
+  }, [vault]);
+
+  // Cleared from Settings, it goes from the panel too - and the agent starts
+  // a conversation that does not have it.
+  useEffect(() => {
+    function onCleared(event: Event) {
+      if ((event as CustomEvent<string | null>).detail !== vault) return;
+      lastNote.current = null;
+      setTurns([]);
+      invoke("agent_new_chat").catch(() => {});
+    }
+    window.addEventListener(CONVERSATION_CLEARED, onCleared);
+    return () => window.removeEventListener(CONVERSATION_CLEARED, onCleared);
+  }, [vault]);
+
+  // And kept as it goes, each time an answer finishes.
+  const finished = turns.filter((turn) => turn.answer.state !== "streaming" && !turn.edits?.aligning);
+  const finishedKey = finished.map((turn) => `${turn.id}:${turn.answer.state}`).join(",");
+  const latest = useRef(turns);
+  useEffect(() => {
+    latest.current = turns;
+  }, [turns]);
+  useEffect(() => {
+    if (!finishedKey) return;
+    saveConversation(vault, latest.current.filter((turn) => turn.answer.state !== "streaming").map(kept));
+  }, [finishedKey, vault]);
 
   const update = useCallback((id: number, change: (turn: ChatTurn) => ChatTurn) => {
     setTurns((all) => all.map((turn) => (turn.id === id ? change(turn) : turn)));
@@ -247,9 +338,34 @@ export function useAiChat(agent: string, access: NoteAccess) {
   const running = turns.some((turn) => turn.answer.state === "streaming" || turn.edits?.aligning);
 
   const ask = useCallback(
-    async ({ question, path, context, intent, model }: AskInput) => {
+    async ({
+      question,
+      text,
+      action,
+      about,
+      instructions,
+      memory,
+      path,
+      context,
+      intent,
+      model,
+    }: AskInput) => {
       const id = ++nextId.current;
-      const input = { agent, question, context, intent, declined: declined.current };
+      // What was said before, for an agent that turns out not to have it.
+      const history = latest.current
+        .filter((turn) => turn.answer.state === "done")
+        .map((turn) => ({ question: turn.question, answer: proseOf(answerText(turn.answer)) }))
+        .filter((turn) => turn.answer);
+      const input = {
+        agent,
+        question,
+        context,
+        intent,
+        declined: declined.current,
+        instructions,
+        memory,
+        history,
+      };
       const full = buildPrompt(input);
       const note = context ? `${context.title}\n${markedNote(context)}` : "";
       const unchanged = lastNote.current !== null && lastNote.current === note;
@@ -257,13 +373,33 @@ export function useAiChat(agent: string, access: NoteAccess) {
       lastNote.current = note;
       declined.current = [];
 
-      setTurns((all) => [...all, { id, question, intent, context, answer: emptyAnswer(), edits: null }]);
+      const startedAt = Date.now();
+      setTurns((all) => [
+        ...all,
+        {
+          id,
+          question,
+          text,
+          action,
+          about,
+          intent,
+          context,
+          answer: emptyAnswer(),
+          edits: null,
+          startedAt,
+          took: null,
+        },
+      ]);
 
       const answer = await prompt(sent, unchanged ? full : null, path, model, (event) => {
         // A turn that did not finish may not have reached the agent whole, so
         // the next one sends everything again.
         if (event.kind === "failed") lastNote.current = null;
-        update(id, (turn) => ({ ...turn, answer: applyEvent(turn.answer, event) }));
+        update(id, (turn) => ({
+          ...turn,
+          answer: applyEvent(turn.answer, event),
+          took: event.kind === "done" || event.kind === "failed" ? Date.now() - startedAt : turn.took,
+        }));
       });
       if (answer.state === "failed") {
         lastNote.current = null;
@@ -302,8 +438,9 @@ export function useAiChat(agent: string, access: NoteAccess) {
     lastNote.current = null;
     declined.current = [];
     setTurns([]);
+    saveConversation(vault, []);
     invoke("agent_new_chat").catch((error) => console.error("Couldn't start a new conversation:", error));
-  }, []);
+  }, [vault]);
 
   return { turns, running, ask, show, stop, newChat };
 }

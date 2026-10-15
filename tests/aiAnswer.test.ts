@@ -99,6 +99,9 @@ describe("an answer as it is shown", () => {
           },
           intent: "ask",
           declined: [{ find: "a", replace: "b" }],
+          instructions: "Be brief.",
+          memory: ["British spelling"],
+          history: [{ question: "Earlier?", answer: "Yes." }],
         },
         "n0"
       ),

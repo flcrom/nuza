@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle, X } from "lucide-react";
 import { cn } from "cn";
 import { Switch } from "@/components/ui/switch";
 import { useAgent } from "@/hooks/useAgent";
@@ -18,6 +18,16 @@ import {
   type Readiness,
 } from "@/lib/ai/agents";
 import { chooseModel, modelFor, type ModelChoices } from "@/lib/ai/modelChoice";
+import {
+  CONVERSATION_CLEARED,
+  MEMORY_ITEM_LENGTH,
+  forget,
+  memoryFor,
+  remember,
+  saveConversation,
+  type MemoryStore,
+} from "@/lib/ai/memory";
+import { INSTRUCTIONS_LIMIT } from "@/lib/ai/prompt";
 import type { AgentConfig, ModelInfo } from "@/lib/ai/protocol";
 import AgentTryOut from "./AgentTryOut";
 import SettingRow from "./SettingRow";
@@ -29,6 +39,112 @@ interface AiSettingsProps {
   setSendWholeNote: (enabled: boolean) => void;
   modelChoices: ModelChoices;
   setModelChoices: (choices: ModelChoices) => void;
+  instructions: string;
+  setInstructions: (instructions: string) => void;
+  memory: MemoryStore;
+  setMemory: (memory: MemoryStore) => void;
+}
+
+/**
+ * How the AI replies: the writer's own instructions, what it should keep in
+ * mind in this vault, and the conversation it remembers.
+ */
+function Replies({
+  vaultPath,
+  instructions,
+  setInstructions,
+  memory,
+  setMemory,
+}: Pick<AiSettingsProps, "vaultPath" | "instructions" | "setInstructions" | "memory" | "setMemory">) {
+  const [adding, setAdding] = useState("");
+  const kept = memoryFor(memory, vaultPath);
+  const field =
+    "w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--nuza-accent)]";
+  const add = () => {
+    if (!adding.trim()) return;
+    setMemory(remember(memory, vaultPath, adding));
+    setAdding("");
+  };
+  return (
+    <section className="space-y-4 border-t border-zinc-800 pt-3">
+      <div className="space-y-1.5">
+        <h3 className="text-sm font-medium text-white">How it replies</h3>
+        <p className="text-xs text-gray-500">
+          Sent with every question, as your preferences. They can&apos;t change what the agent is allowed to
+          do.
+        </p>
+        <textarea
+          value={instructions}
+          maxLength={INSTRUCTIONS_LIMIT}
+          onChange={(event) => setInstructions(event.target.value)}
+          placeholder="Reply briefly, in British English. Keep my tone casual."
+          className={cn(field, "h-20 resize-none")}
+        />
+        <p className="text-right text-[11px] text-gray-600">
+          {instructions.length}/{INSTRUCTIONS_LIMIT}
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <h3 className="text-sm font-medium text-white">Memory</h3>
+        <p className="text-xs text-gray-500">
+          {vaultPath
+            ? "Things to keep in mind in this folder. You can also type /remember in the panel."
+            : "Things to keep in mind when no folder is open."}
+        </p>
+        {kept.length > 0 && (
+          <ul className="space-y-1">
+            {kept.map((item, index) => (
+              <li
+                key={`${index}:${item}`}
+                className="flex items-start justify-between gap-2 rounded-md bg-zinc-800/50 px-2 py-1 text-xs text-gray-300"
+              >
+                <span className="min-w-0 break-words">{item}</span>
+                <button
+                  type="button"
+                  onClick={() => setMemory(forget(memory, vaultPath, index))}
+                  title="Forget this"
+                  aria-label={`Forget “${item}”`}
+                  className="shrink-0 cursor-pointer text-gray-500 hover:text-white"
+                >
+                  <X size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2">
+          <input
+            value={adding}
+            maxLength={MEMORY_ITEM_LENGTH}
+            onChange={(event) => setAdding(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && add()}
+            placeholder="The project is called Tangerine"
+            className={field}
+          />
+          <button type="button" className={cn(BUTTON, "shrink-0")} disabled={!adding.trim()} onClick={add}>
+            Remember
+          </button>
+        </div>
+      </div>
+
+      <SettingRow
+        title="Conversation"
+        description="Kept on this computer, so the AI can pick up where you left off after a restart."
+      >
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={() => {
+            saveConversation(vaultPath, []);
+            window.dispatchEvent(new CustomEvent(CONVERSATION_CLEARED, { detail: vaultPath }));
+          }}
+        >
+          Clear
+        </button>
+      </SettingRow>
+    </section>
+  );
 }
 
 const BUTTON =
@@ -256,6 +372,10 @@ export default function AiSettings({
   setSendWholeNote,
   modelChoices,
   setModelChoices,
+  instructions,
+  setInstructions,
+  memory,
+  setMemory,
 }: AiSettingsProps) {
   const {
     state,
@@ -407,12 +527,21 @@ export default function AiSettings({
         )}
       </section>
 
+      <Replies
+        vaultPath={vaultPath}
+        instructions={instructions}
+        setInstructions={setInstructions}
+        memory={memory}
+        setMemory={setMemory}
+      />
+
       <section className="border-t border-zinc-800 pt-3">
         <h3 className="text-sm font-medium text-white">What gets sent</h3>
         <p className="mt-1 text-xs text-gray-500">
-          Your questions, the text you select and the note you&apos;re asking about go to the agent program on
-          this computer{preset ? `, ${preset.label},` : ""} which sends them on to its own provider, on your
-          own account. nuza has no server and keeps nothing.{" "}
+          Your questions, the text you select, the note you&apos;re asking about, your instructions and memory
+          go to the agent program on this computer{preset ? `, ${preset.label},` : ""} which sends them on to
+          its own provider, on your own account. nuza has no server: the conversation and memory stay on this
+          computer.{" "}
           <button
             type="button"
             className="cursor-pointer text-[var(--nuza-accent)] hover:underline"

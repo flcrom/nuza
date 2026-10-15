@@ -186,6 +186,22 @@ function answerAbout(note) {
   return parts.join("\n\n");
 }
 
+/** An edit to what was selected - or, with nothing selected, to the note's first sentences. */
+function suggestChange(note) {
+  if (!note) return "There's no note text to change here.";
+  const selected = /⟦selection⟧([\s\S]*?)⟦\/selection⟧/.exec(note)?.[1];
+  const edits = selected?.trim()
+    ? [
+        {
+          find: selected,
+          replace: `${selected.trim().replace(/\.$/, "")}, put more plainly.`,
+          why: "A stand-in's change, to try the review.",
+        },
+      ]
+    : editsFor(note);
+  return `Here's a suggestion - it's nuza's stand-in agent, so the change is only a placeholder.\n\n${editsBlock(edits)}`;
+}
+
 /** Edits to the first two plain sentences of a note: what a real agent might suggest. */
 function editsFor(note) {
   let inFrontmatter = note.startsWith("---");
@@ -221,7 +237,12 @@ async function prompt(id, { sessionId, prompt: parts }) {
   // an agent would give one. A bare test message is echoed, so the Rust tests
   // can see exactly what arrived.
   const asked = /(?:Their question|The change they want[^:\n]*):\n([\s\S]*)$/.exec(text);
-  let reply = asked ? answerAbout(noteIn(text) ?? session.note ?? null) : `You said: ${text}`;
+  const wantsChange = /The change they want/.test(text);
+  let reply = asked
+    ? wantsChange
+      ? suggestChange(noteIn(text) ?? session.note ?? null)
+      : answerAbout(noteIn(text) ?? session.note ?? null)
+    : `You said: ${text}`;
 
   if (text.includes("STALL")) return void stalled.set(sessionId, id);
 
