@@ -17,6 +17,17 @@ function inline(nodes: Inline[], citations: Citations | null): ReactNode[] {
             {node.text}
           </code>
         );
+      case "math":
+        // TeX as it was written: drawing it would mean HTML from the agent.
+        return (
+          <code
+            key={index}
+            title="TeX"
+            className="rounded bg-zinc-800/70 px-1 py-px font-mono text-[0.85em] italic"
+          >
+            {node.text}
+          </code>
+        );
       case "strong":
         return <strong key={index}>{inline(node.children, citations)}</strong>;
       case "em":
@@ -110,6 +121,41 @@ function AnswerText({ text }: { text: string }) {
             );
           case "code":
             return <CodeBlock key={index} language={block.language} text={block.text} />;
+          case "table":
+            return (
+              <div key={index} className="overflow-x-auto">
+                <table className="w-full border-collapse text-[0.92em]">
+                  <thead>
+                    <tr>
+                      {block.header.map((cell, column) => (
+                        <th
+                          key={column}
+                          style={{ textAlign: block.align[column] ?? "left" }}
+                          className="border border-zinc-800 bg-zinc-900/70 px-2 py-1 font-medium text-gray-200"
+                        >
+                          {inline(cell, citations)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, line) => (
+                      <tr key={line}>
+                        {row.map((cell, column) => (
+                          <td
+                            key={column}
+                            style={{ textAlign: block.align[column] ?? "left" }}
+                            className="border border-zinc-800 px-2 py-1 align-top"
+                          >
+                            {inline(cell, citations)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
           case "quote":
             return (
               <blockquote

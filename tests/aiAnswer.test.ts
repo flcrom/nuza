@@ -152,3 +152,41 @@ describe("reasoning a model writes into its answer", () => {
     expect(withoutThinking("Use `<b>` for bold.")).toBe("Use `<b>` for bold.");
   });
 });
+
+describe("tables and math in an answer", () => {
+  test("a table is read with its alignment, and an escaped pipe stays in its cell", () => {
+    const blocks = parseAnswer(
+      "Steps:\n\n| Step | Done |\n| :--- | :---: |\n| Sign `a\\|b` | No |\n| Notarise | Yes |\n\nAfter."
+    );
+    const table = blocks.find((block) => block.type === "table");
+    expect(table).toBeDefined();
+    if (table?.type !== "table") return;
+    expect(table.align).toEqual(["left", "center"]);
+    expect(table.header).toEqual([[{ type: "text", text: "Step" }], [{ type: "text", text: "Done" }]]);
+    expect(table.rows).toHaveLength(2);
+    expect(table.rows[0][0]).toEqual([
+      { type: "text", text: "Sign " },
+      { type: "code", text: "a|b" },
+    ]);
+    expect(blocks.at(-1)).toEqual({ type: "paragraph", children: [{ type: "text", text: "After." }] });
+  });
+
+  test("a line with a pipe but no rule under it is prose", () => {
+    expect(parseAnswer("this | that").map((block) => block.type)).toEqual(["paragraph"]);
+  });
+
+  test("inline TeX by the editor's rules, and money is not math", () => {
+    expect(parseInline("so $x^2$ grows")).toEqual([
+      { type: "text", text: "so " },
+      { type: "math", text: "x^2" },
+      { type: "text", text: " grows" },
+    ]);
+    expect(parseInline("it cost $5 and $10")).toEqual([{ type: "text", text: "it cost $5 and $10" }]);
+    expect(parseInline("$ x $")).toEqual([{ type: "text", text: "$ x $" }]);
+  });
+
+  test("a $$ block is kept as TeX", () => {
+    expect(parseAnswer("$$\nE = mc^2\n$$")).toEqual([{ type: "code", language: "tex", text: "E = mc^2" }]);
+    expect(parseAnswer("$$a+b$$")).toEqual([{ type: "code", language: "tex", text: "a+b" }]);
+  });
+});

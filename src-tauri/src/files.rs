@@ -859,8 +859,8 @@ pub(crate) async fn write_file(
 /// the agent suggested. Its folders are made as needed, all inside the
 /// vault; a note already there is never written over. Returns where it is.
 #[tauri::command]
-pub(crate) async fn create_note(
-    window: tauri::WebviewWindow,
+pub(crate) async fn create_note<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
     path: String,
     content: String,
 ) -> Result<String, String> {
@@ -896,7 +896,15 @@ pub(crate) async fn create_note(
         std::io::Write::write_all(&mut file, content.as_bytes())
             .map_err(|error| error.to_string())?;
         note_changes(&window, &[&path]);
-        Ok(path.to_string_lossy().into_owned())
+        // Spelled the way the file tree spells it - from the folder as it was
+        // opened, not as it resolves - so it opens as the note the tree shows.
+        let shown = vault.index.display_root();
+        let shown = if shown.as_os_str().is_empty() {
+            root
+        } else {
+            shown
+        };
+        Ok(shown.join(&relative).to_string_lossy().into_owned())
     })
     .await
 }
