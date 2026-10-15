@@ -11,6 +11,7 @@ import KeymapSettings from "./settings/KeymapSettings";
 import InfoSettings from "./settings/InfoSettings";
 import AiSettings from "./settings/AiSettings";
 import type { ModelChoices } from "@/lib/ai/modelChoice";
+import type { MemoryStore } from "@/lib/ai/memory";
 
 type SettingsSection = "general" | "appearance" | "keymaps" | "ai" | "info";
 
@@ -66,6 +67,10 @@ interface SettingsModalProps {
   setAiSendWholeNote: (enabled: boolean) => void;
   aiModelChoices: ModelChoices;
   setAiModelChoices: (choices: ModelChoices) => void;
+  aiInstructions: string;
+  setAiInstructions: (instructions: string) => void;
+  aiMemory: MemoryStore;
+  setAiMemory: (memory: MemoryStore) => void;
 }
 
 export default function SettingsModal({
@@ -111,6 +116,10 @@ export default function SettingsModal({
   setAiSendWholeNote,
   aiModelChoices,
   setAiModelChoices,
+  aiInstructions,
+  setAiInstructions,
+  aiMemory,
+  setAiMemory,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
 
@@ -228,6 +237,10 @@ export default function SettingsModal({
                 setSendWholeNote={setAiSendWholeNote}
                 modelChoices={aiModelChoices}
                 setModelChoices={setAiModelChoices}
+                instructions={aiInstructions}
+                setInstructions={setAiInstructions}
+                memory={aiMemory}
+                setMemory={setAiMemory}
               />
             )}
 

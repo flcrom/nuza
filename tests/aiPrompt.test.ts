@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AiContext } from "../src/lib/ai/context";
 import {
+  INSTRUCTIONS_LIMIT,
   SELECTION_END,
   SELECTION_START,
   buildFollowUp,
@@ -155,5 +156,56 @@ describe("the prompt", () => {
     expect(buildFollowUp({ agent: "Codex", question: "?", context: note, intent: "ask" })).not.toContain(
       "turned these"
     );
+  });
+});
+
+describe("the writer's own preferences", () => {
+  const input = {
+    agent: "Claude Code",
+    question: "Tighten it",
+    context: note,
+    intent: "edit" as const,
+    instructions: "Reply in British English, briefly.",
+    memory: ["The release is called Tangerine.", "  "],
+    history: [{ question: "What is this note?", answer: "A release plan." }],
+  };
+
+  test("their instructions go with every message, as preferences that grant nothing", () => {
+    for (const prompt of [buildPrompt(input, "n0"), buildFollowUp(input)]) {
+      expect(prompt).toContain("Reply in British English, briefly.");
+      expect(prompt).toContain("do not change what you can and cannot do here");
+    }
+  });
+
+  test("their instructions are cut to a limit", () => {
+    const long = buildPrompt({ ...input, instructions: "x".repeat(5000) }, "n0");
+    expect(long).toContain("x".repeat(INSTRUCTIONS_LIMIT));
+    expect(long).not.toContain("x".repeat(INSTRUCTIONS_LIMIT + 1));
+  });
+
+  test("what they asked to be remembered goes with every message, blanks left out", () => {
+    for (const prompt of [buildPrompt(input, "n0"), buildFollowUp(input)]) {
+      expect(prompt).toContain(
+        "What the writer has asked you to remember:\n- The release is called Tangerine."
+      );
+      expect(prompt).not.toContain("-   ");
+    }
+  });
+
+  test("the conversation so far goes to a fresh session, and not again in a follow-up", () => {
+    expect(buildPrompt(input, "n0")).toContain(
+      "Earlier in this conversation:\n\nThey asked: What is this note?\nYou answered: A release plan."
+    );
+    expect(buildFollowUp(input)).not.toContain("Earlier in this conversation");
+  });
+
+  test("a long conversation is cut from its oldest end", () => {
+    const history = Array.from({ length: 40 }, (_, n) => ({
+      question: `Question ${n}`,
+      answer: "a".repeat(400),
+    }));
+    const prompt = buildPrompt({ ...input, history }, "n0");
+    expect(prompt).toContain("Question 39");
+    expect(prompt).not.toContain("Question 0\n");
   });
 });

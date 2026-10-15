@@ -20,10 +20,15 @@ function turn(events: AgentEvent[]): ChatTurn {
   return {
     id: 1,
     question: "Tighten this up",
+    text: "Tighten this up",
+    action: null,
+    about: { title: "release.md", lines: "L9-10" },
     intent: "ask",
     context: null,
     answer: events.reduce(applyEvent, emptyAnswer()),
     edits: null,
+    startedAt: 0,
+    took: 12_000,
   };
 }
 
@@ -69,16 +74,45 @@ describe("the panel with no agent turned on", () => {
 });
 
 describe("an answer in the panel", () => {
-  test("is signed with the agent's own name, never nuza's", () => {
+  test("carries no name label - and where it is named, it is the agent's own name, never nuza's", () => {
     const markup = render(
       [
+        { kind: "refused", action: "run a command" },
         { kind: "token", text: "Shorter." },
         { kind: "done", stop_reason: "end_turn" },
       ],
       "Codex"
     );
-    expect(markup).toContain(">Codex<");
     expect(markup).toContain("Shorter.");
+    expect(markup).not.toMatch(/>Codex</);
+    expect(markup).toContain("nuza didn&#x27;t let Codex run a command.");
+  });
+
+  test("the writer's message shows the note and lines it is about, then their words", () => {
+    const markup = render([]);
+    expect(markup).toContain("release.md");
+    expect(markup).toContain("#L9-10");
+    expect(markup).toContain("Tighten this up");
+  });
+
+  test("thinking and steps fold into one line that says how long it took", () => {
+    const markup = render([
+      { kind: "thought", text: "Hm." },
+      { kind: "step", id: "s", title: "mcp__nuza__search_vault", status: "completed" },
+      { kind: "token", text: "Found it." },
+      { kind: "done", stop_reason: "end_turn" },
+    ]);
+    expect(markup).toContain("Worked for 12s");
+    expect(markup).toContain("Searched the vault");
+    // Folded away once the answer is there.
+    expect(markup).toContain('<details class="group');
+    expect(markup).not.toMatch(/<details[^>]* open/);
+  });
+
+  test("a code block has its language and a copy button", () => {
+    const markup = render([{ kind: "token", text: "```ts\nconst a = 1;\n```" }]);
+    expect(markup).toContain(">ts<");
+    expect(markup).toContain('aria-label="Copy the code"');
   });
 
   test("never shows nuza's own instructions to the agent", () => {
@@ -96,8 +130,8 @@ describe("an answer in the panel", () => {
     expect(markup).toContain("Ship it.");
   });
 
-  test("while it starts, says who is being asked", () => {
-    expect(render([])).toContain("Asking Claude Code");
+  test("while it starts, says it is thinking", () => {
+    expect(render([])).toContain("Thinking…");
   });
 
   test("a step is a line, ticked when it is done", () => {

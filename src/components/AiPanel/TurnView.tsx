@@ -1,4 +1,4 @@
-import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronRight, FileText, LoaderCircle, X } from "lucide-react";
 import type { ChatTurn, EditCard } from "@/hooks/useAiChat";
 import type { AgentErrorKind } from "@/lib/ai/protocol";
 import { forDisplay } from "@/lib/ai/answerMarkdown";
@@ -167,79 +167,126 @@ interface TurnViewProps {
   actions: TurnActions;
 }
 
+/** How long something took, the way a person would say it. */
+export function tookFor(milliseconds: number): string {
+  const seconds = Math.max(1, Math.round(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
+
+/** The writer's message: what it is about, the action if it was one, and their words. */
+function Message({ turn }: { turn: ChatTurn }) {
+  return (
+    <div className="rounded-xl border border-zinc-700/60 bg-zinc-800/50 px-3 py-2 text-[13px] leading-relaxed text-gray-200">
+      {turn.about && (
+        <span className="mr-1.5 inline-flex items-center gap-1 align-baseline text-gray-300">
+          <FileText size={12} className="self-center text-[var(--nuza-accent)]" aria-hidden />
+          <span className="font-medium">{turn.about.title}</span>
+          {turn.about.lines && <span className="text-gray-500">#{turn.about.lines}</span>}
+        </span>
+      )}
+      {turn.action && (
+        <span className="mr-1.5 rounded bg-[var(--nuza-accent-wash)] px-1.5 py-px text-[11px] font-medium text-[var(--nuza-accent)]">
+          {turn.action}
+        </span>
+      )}
+      {turn.text && <span className="whitespace-pre-wrap">{turn.text}</span>}
+    </div>
+  );
+}
+
+type Part = ChatTurn["answer"]["parts"][number];
+
+/**
+ * The agent's thinking and the steps it took, folded into one line - "Worked
+ * for 12s" - that opens to show them. While it is still working, the line
+ * says so, and what it is doing now.
+ */
+function Working({ parts, streaming, took }: { parts: Part[]; streaming: boolean; took: number | null }) {
+  const work = parts.filter((part) => part.type === "thought" || part.type === "step");
+  if (!work.length && !streaming) return null;
+  const current = [...work].reverse().find((part) => part.type === "step");
+  const summary = streaming
+    ? current?.type === "step"
+      ? stepTitle(current.title)
+      : "Thinking…"
+    : took
+      ? `Worked for ${tookFor(took)}`
+      : "Worked";
+  return (
+    <details className="group text-xs text-gray-500">
+      <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 hover:text-gray-300">
+        {streaming && <LoaderCircle size={12} className="shrink-0 animate-spin" aria-hidden />}
+        <span className="truncate">{summary}</span>
+        {work.length > 0 && (
+          <ChevronRight size={12} className="shrink-0 transition-transform group-open:rotate-90" />
+        )}
+      </summary>
+      <div className="mt-1.5 space-y-1 border-l border-zinc-800 pl-2.5">
+        {work.map((part, index) =>
+          part.type === "thought" ? (
+            <p key={index} className="whitespace-pre-wrap text-gray-500">
+              {part.text}
+            </p>
+          ) : part.type === "step" ? (
+            <p key={index} className="flex items-center gap-1.5 text-gray-400">
+              {part.status === "completed" ? (
+                <Check size={12} aria-label="Done" className="shrink-0" />
+              ) : part.status === "failed" ? (
+                <X size={12} aria-label="Failed" className="shrink-0" />
+              ) : (
+                <LoaderCircle size={12} aria-label="Working" className="shrink-0 animate-spin" />
+              )}
+              <span className="truncate">{stepTitle(part.title)}</span>
+            </p>
+          ) : null
+        )}
+      </div>
+    </details>
+  );
+}
+
 /** One question and its answer, as it streams. */
 export default function TurnView({ turn, agent, actions }: TurnViewProps) {
   const { answer } = turn;
-  const hasWords = answer.parts.some((part) => part.type === "text");
+  const streaming = answer.state === "streaming";
+  const hasWords = answer.parts.some((part) => part.type === "text" && forDisplay(proseOf(part.text)).trim());
 
   return (
-    <div className="animate-ai-in space-y-1.5">
-      <p className="text-[11px] uppercase tracking-wide text-gray-500">you</p>
-      <p className="whitespace-pre-wrap text-gray-200">{turn.question}</p>
-      <p className="pt-2 text-[11px] uppercase tracking-wide text-gray-500">{agent}</p>
-      {answer.parts.map((part, index) => {
-        switch (part.type) {
-          case "text": {
-            // The edits block is drawn as cards, not as the JSON it came in.
-            const prose = forDisplay(proseOf(part.text)).trim();
-            return prose ? <AnswerText key={index} text={prose} /> : null;
+    <div className="animate-ai-in space-y-2.5">
+      <Message turn={turn} />
+      <Working parts={answer.parts} streaming={streaming && !hasWords} took={turn.took} />
+      <div className="space-y-2 text-[13px] leading-relaxed text-gray-200">
+        {answer.parts.map((part, index) => {
+          switch (part.type) {
+            case "text": {
+              // The edits block is drawn as cards, not as the JSON it came in.
+              const prose = forDisplay(proseOf(part.text)).trim();
+              return prose ? <AnswerText key={index} text={prose} /> : null;
+            }
+            case "refused":
+              return (
+                <p key={index} className="animate-ai-in text-xs text-amber-400/90">
+                  nuza didn&apos;t let {agent} {part.action}.
+                </p>
+              );
+            case "notice":
+              return (
+                <p key={index} className="animate-ai-in text-xs italic text-gray-500">
+                  {part.text}
+                </p>
+              );
+            default:
+              return null;
           }
-          case "thought":
-            // Open while the model is still thinking, folded away once it
-            // has started to answer.
-            return (
-              <details
-                key={index}
-                open={answer.state === "streaming" && !hasWords}
-                className="group text-gray-500"
-              >
-                <summary className="flex cursor-pointer select-none list-none items-center gap-1">
-                  <ChevronRight size={12} className="transition-transform group-open:rotate-90" />
-                  Thinking…
-                </summary>
-                <p className="whitespace-pre-wrap pl-4 text-xs">{part.text}</p>
-              </details>
-            );
-          case "step":
-            return (
-              <p key={index} className="animate-ai-in flex items-center gap-1.5 text-xs text-gray-400">
-                {part.status === "completed" ? (
-                  <Check size={12} aria-label="Done" className="shrink-0" />
-                ) : part.status === "failed" ? (
-                  <X size={12} aria-label="Failed" className="shrink-0" />
-                ) : (
-                  <LoaderCircle size={12} aria-label="Working" className="shrink-0 animate-spin" />
-                )}
-                <span className="truncate">{stepTitle(part.title)}</span>
-              </p>
-            );
-          case "refused":
-            return (
-              <p key={index} className="animate-ai-in text-xs text-amber-400/90">
-                nuza didn&apos;t let {agent} {part.action}.
-              </p>
-            );
-          case "notice":
-            return (
-              <p key={index} className="animate-ai-in text-xs italic text-gray-400">
-                {part.text}
-              </p>
-            );
-        }
-      })}
-
-      {answer.state === "streaming" && !hasWords && !answer.parts.some((part) => part.type === "thought") && (
+        })}
+      </div>
+      {streaming && answer.parts.some((part) => part.type === "text" && hasEditsBlock(part.text)) && (
         <p className="flex items-center gap-1.5 text-xs text-gray-500">
-          <LoaderCircle size={12} className="animate-spin" />{" "}
-          {answer.parts.length ? "Working…" : `Asking ${agent}…`}
+          <LoaderCircle size={12} className="animate-spin" /> Writing the changes…
         </p>
       )}
-      {answer.state === "streaming" &&
-        answer.parts.some((part) => part.type === "text" && hasEditsBlock(part.text)) && (
-          <p className="flex items-center gap-1.5 text-xs text-gray-500">
-            <LoaderCircle size={12} className="animate-spin" /> Writing the changes…
-          </p>
-        )}
       <Edits turn={turn} actions={actions} />
       {answer.state === "done" && answer.stopReason === "cancelled" && (
         <p className="text-xs text-gray-500">Stopped.</p>
@@ -250,7 +297,7 @@ export default function TurnView({ turn, agent, actions }: TurnViewProps) {
       {answer.state === "done" && answer.stopReason === "max_tokens" && (
         <p className="text-xs text-gray-500">{agent} ran out of room before it finished.</p>
       )}
-      {answer.state === "done" && !hasWords && answer.stopReason === "end_turn" && (
+      {answer.state === "done" && !hasWords && !turn.edits && answer.stopReason === "end_turn" && (
         <p className="text-xs text-gray-500">{agent} finished without saying anything.</p>
       )}
       {answer.state === "failed" && answer.error && (

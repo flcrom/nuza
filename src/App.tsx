@@ -34,6 +34,7 @@ import { useAppearance } from "./hooks/useAppearance";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { NO_MODEL_CHOICES, type ModelChoices } from "./lib/ai/modelChoice";
+import { NO_MEMORY, memoryFor, remember, type MemoryStore } from "./lib/ai/memory";
 import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useOutline } from "./hooks/useOutline";
 import { hasEmbeds, refreshEmbeds, setVaultFiles } from "./lib/markdown/embedIndex";
@@ -128,6 +129,10 @@ function App() {
   // reads either until an agent has been turned on.
   const [aiSendWholeNote, setAiSendWholeNote] = usePersistedState("aiSendWholeNote", true);
   const [aiModelChoices, setAiModelChoices] = usePersistedState<ModelChoices>("aiModel", NO_MODEL_CHOICES);
+  // How the writer likes replies, and what the AI should keep in mind per
+  // vault: both theirs, both kept on this computer.
+  const [aiInstructions, setAiInstructions] = usePersistedState("aiInstructions", "");
+  const [aiMemory, setAiMemory] = usePersistedState<MemoryStore>("aiMemory", NO_MEMORY);
 
   // Read by the editor's theme through the stylesheet, so a slider being
   // dragged restyles the note without the editor being reconfigured.
@@ -951,6 +956,9 @@ function App() {
               viewFor={aiViewFor}
               openNote={openForAi}
               openAt={openAiCitation}
+              instructions={aiInstructions}
+              memory={memoryFor(aiMemory, rootPath)}
+              onRemember={(item) => setAiMemory((store) => remember(store, rootPath, item))}
               sendWholeNote={aiSendWholeNote}
               vaultPath={rootPath}
               modelChoices={aiModelChoices}
@@ -1201,6 +1209,10 @@ function App() {
         setAiSendWholeNote={setAiSendWholeNote}
         aiModelChoices={aiModelChoices}
         setAiModelChoices={setAiModelChoices}
+        aiInstructions={aiInstructions}
+        setAiInstructions={setAiInstructions}
+        aiMemory={aiMemory}
+        setAiMemory={setAiMemory}
       />
     </main>
   );

@@ -1,5 +1,6 @@
-import { memo, useContext, type ReactNode } from "react";
-import { FileText } from "lucide-react";
+import { memo, useContext, useState, type ReactNode } from "react";
+import { Check, Copy, FileText } from "lucide-react";
+import { copyText } from "@/lib/clipboard";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isWebLink, parseAnswer, parseCitation, type Inline } from "@/lib/ai/answerMarkdown";
 import { CitationContext, type Citations } from "./citations";
@@ -59,6 +60,35 @@ function inline(nodes: Inline[], citations: Citations | null): ReactNode[] {
   });
 }
 
+/** A block of code in an answer, with what language it is and a way to copy it. */
+function CodeBlock({ language, text }: { language: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () =>
+    void copyText(text)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      })
+      .catch((error) => report("Couldn't copy that", error));
+  return (
+    <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/80">
+      <div className="flex items-center justify-between border-b border-zinc-800 px-2.5 py-1 text-[11px] text-gray-500">
+        <span>{language || "text"}</span>
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy"
+          aria-label="Copy the code"
+          className="cursor-pointer rounded p-0.5 hover:bg-zinc-800 hover:text-gray-200"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-2.5 font-mono text-[0.85em] leading-snug">{text}</pre>
+    </div>
+  );
+}
+
 /** An answer's words, drawn from its Markdown without ever becoming HTML. */
 function AnswerText({ text }: { text: string }) {
   const citations = useContext(CitationContext);
@@ -79,14 +109,7 @@ function AnswerText({ text }: { text: string }) {
               </p>
             );
           case "code":
-            return (
-              <pre
-                key={index}
-                className="overflow-x-auto rounded-md bg-zinc-900 p-2 font-mono text-[0.85em] leading-snug"
-              >
-                {block.text}
-              </pre>
-            );
+            return <CodeBlock key={index} language={block.language} text={block.text} />;
           case "quote":
             return (
               <blockquote
