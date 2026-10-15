@@ -1456,8 +1456,16 @@ async fn real_claude_searches_the_vault_and_cites_it() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir_all(root.join("projects")).unwrap();
-    std::fs::write(root.join("projects/fruit.md"), "# Fruit\n\nThe launch codename is Tangerine.\n").unwrap();
-    std::fs::write(root.join("diary.md"), "# Diary\n\nNothing about launches.\n").unwrap();
+    std::fs::write(
+        root.join("projects/fruit.md"),
+        "# Fruit\n\nThe launch codename is Tangerine.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("diary.md"),
+        "# Diary\n\nNothing about launches.\n",
+    )
+    .unwrap();
     let vault = Arc::new(crate::state::Vault {
         root: std::sync::Mutex::new(Some(root.clone())),
         index: crate::index::VaultIndex::for_folder(&root).unwrap(),
@@ -1467,12 +1475,18 @@ async fn real_claude_searches_the_vault_and_cites_it() {
         server: crate::vaultserver::VaultServer::start().unwrap(),
         vault,
     });
-    let harness = AgentHarness::new(Arc::new(super::start::command_for), super::start::sessions_root())
-        .with_tools(tools as Arc<dyn VaultTools>);
-    timeout(Duration::from_secs(300), harness.use_agent(AgentConfig::ClaudeCode))
-        .await
-        .unwrap()
-        .unwrap();
+    let harness = AgentHarness::new(
+        Arc::new(super::start::command_for),
+        super::start::sessions_root(),
+    )
+    .with_tools(tools as Arc<dyn VaultTools>);
+    timeout(
+        Duration::from_secs(300),
+        harness.use_agent(AgentConfig::ClaudeCode),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let panel = Panel::default();
     let outcome = harness
         .prompt(
@@ -1491,7 +1505,10 @@ async fn real_claude_searches_the_vault_and_cites_it() {
     println!("ANSWER: {}", panel.said());
     println!("OUTCOME: {outcome:?}");
     assert!(outcome.is_ok());
-    assert!(panel.said().contains("Tangerine"), "the answer came from the vault");
+    assert!(
+        panel.said().contains("Tangerine"),
+        "the answer came from the vault"
+    );
     assert!(!panel
         .events()
         .iter()
