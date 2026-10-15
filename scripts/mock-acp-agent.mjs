@@ -237,7 +237,13 @@ async function prompt(id, { sessionId, prompt: parts }) {
   // an agent would give one. A bare test message is echoed, so the Rust tests
   // can see exactly what arrived.
   const asked = /(?:Their question|The change they want[^:\n]*):\n([\s\S]*)$/.exec(text);
-  const wantsChange = /The change they want/.test(text);
+  // A change asked for, by an action or in the writer's own words - as a real
+  // agent would take "can you rephrase this".
+  const wantsChange =
+    /The change they want/.test(text) ||
+    /\b(rephrase|reword|rewrite|improve|proofread|fix|shorten|tighten|simplify|synonym)\b/i.test(
+      text.split("Their question:").at(-1) ?? ""
+    );
   let reply = asked
     ? wantsChange
       ? suggestChange(noteIn(text) ?? session.note ?? null)
