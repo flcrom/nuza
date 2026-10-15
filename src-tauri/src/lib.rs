@@ -128,7 +128,7 @@ pub fn run() {
             // refusing to start over.
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = window::apply_transparency(&window, true) {
-                    eprintln!("nuza: no window backdrop on this platform: {}", error);
+                    log::warn!("no window backdrop on this platform: {}", error);
                 }
             }
 

@@ -79,6 +79,9 @@ impl Grants {
 pub(crate) struct VaultServer {
     url: String,
     grants: Arc<Grants>,
+    /// The loop taking connections. Stopping it drops the listener, and the
+    /// port with it. None for a server the tests ask directly.
+    accepting: Option<tokio::task::AbortHandle>,
 }
 
 impl VaultServer {
@@ -90,7 +93,7 @@ impl VaultServer {
         let listener = TcpListener::from_std(listener)?;
         let grants = Arc::<Grants>::default();
         let serving = Arc::clone(&grants);
-        tokio::spawn(async move {
+        let accepting = tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     continue;
@@ -98,11 +101,22 @@ impl VaultServer {
                 let grants = Arc::clone(&serving);
                 tokio::spawn(async move { serve(stream, &grants, port).await });
             }
-        });
+        })
+        .abort_handle();
         Ok(Self {
             url: format!("http://127.0.0.1:{port}/mcp"),
             grants,
+            accepting: Some(accepting),
         })
+    }
+
+    /// Stops listening, and every token with it: the port is closed, and a
+    /// request already on its way reads nothing.
+    pub(crate) fn stop(&self) {
+        locked(&self.grants.0).clear();
+        if let Some(accepting) = &self.accepting {
+            accepting.abort();
+        }
     }
 
     pub(crate) fn url(&self) -> &str {

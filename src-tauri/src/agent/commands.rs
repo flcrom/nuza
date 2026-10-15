@@ -34,6 +34,8 @@ pub(crate) struct AgentState {
     pub(crate) label: Option<String>,
     /// Whether this computer fences the agent in.
     pub(crate) sandboxed: bool,
+    /// Why it does not, where that is worth saying.
+    pub(crate) unfenced_because: Option<&'static str>,
     /// Whether the agent may look things up on the web for this window's
     /// vault.
     pub(crate) web_lookups: bool,
@@ -112,6 +114,7 @@ pub(crate) async fn agent_state(
         label: agent.as_ref().map(AgentConfig::label),
         agent,
         sandboxed: super::start::sandboxed(),
+        unfenced_because: super::start::unfenced_because(),
         web_lookups: vault
             .as_deref()
             .is_some_and(|vault| store.web_lookups(vault)),
@@ -157,15 +160,17 @@ pub(crate) async fn agent_use(
     Ok(true)
 }
 
-/// Turns AI off: the agent is stopped, and nothing is started again until
-/// one is turned on.
+/// Turns AI off: the agent is stopped, the vault tools stop listening, and
+/// nothing is started again until an agent is turned on.
 #[tauri::command]
 pub(crate) async fn agent_turn_off(
     harness: State<'_, Arc<AgentHarness>>,
+    tools: State<'_, Arc<super::tools::AppVaultTools>>,
     store: State<'_, Store>,
 ) -> Result<(), String> {
     store.update(|decisions| decisions.agent = None);
     harness.set_agent(None).await;
+    tools.stop();
     Ok(())
 }
 

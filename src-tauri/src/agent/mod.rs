@@ -9,12 +9,17 @@
 
 pub(crate) mod commands;
 mod config;
+// The Linux fence's policy is plain data, tested everywhere; only Linux
+// applies it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod confine;
 mod errors;
 mod events;
 mod harness;
 mod rpc;
-// Plain data, tested on every Unix; only macOS applies it.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// Plain data, tested everywhere; macOS applies it as a Seatbelt profile and
+// Linux as Landlock rules (`confine`).
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 mod sandbox;
 pub(crate) mod start;
 mod status;
