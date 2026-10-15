@@ -39,9 +39,36 @@ export function subscribe(listener: () => void) {
   };
 }
 
+/**
+ * Ends a drag the engine never said had ended. A drop can come and go with no
+ * `dragend` after it - WebKit drops it now and then - and the drag was then
+ * left running: its tab faded, the marker standing where it would have gone,
+ * until the app was restarted. The first time the pointer moves with no
+ * button held, or is pressed again, the drag is over whatever was said.
+ * Neither happens during a drag, which has the mouse to itself until it ends.
+ */
+function strayMove(event: MouseEvent) {
+  if (event.buttons === 0) endTabDrag();
+}
+function strayPress() {
+  endTabDrag();
+}
+
+function watchForStrayEnd(on: boolean) {
+  if (typeof window === "undefined") return;
+  if (on) {
+    window.addEventListener("mousemove", strayMove, true);
+    window.addEventListener("mousedown", strayPress, true);
+  } else {
+    window.removeEventListener("mousemove", strayMove, true);
+    window.removeEventListener("mousedown", strayPress, true);
+  }
+}
+
 export function beginTabDrag(path: string) {
   dragged = path;
   taken = false;
+  watchForStrayEnd(true);
   announce();
 }
 
@@ -57,6 +84,7 @@ export function wasTabDragTaken() {
 export function endTabDrag() {
   if (dragged === null) return;
   dragged = null;
+  watchForStrayEnd(false);
   announce();
 }
 

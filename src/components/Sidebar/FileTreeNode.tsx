@@ -55,6 +55,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
   const {
     onFileSelect,
     currentFile,
+    selectedPath,
     renamingPath,
     submitRename,
     cancelRename,
@@ -208,8 +209,11 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
               openContextMenu(e, entry);
             }}
             className={`flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors compact:py-0.5 hover:bg-zinc-800/25 hover:text-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] [&::-webkit-details-marker]:hidden ${
-              isDraggedOver ? "bg-zinc-700/50 outline outline-1 outline-zinc-500" : ""
-            } ${isBeingDragged ? "opacity-40" : ""}`}
+              // Selected, so where the header's New File and New Folder go.
+              selectedPath === entry.path
+                ? "bg-white/5 text-zinc-100 group-focus-within/tree:bg-white/10"
+                : ""
+            } ${isDraggedOver ? "bg-zinc-700/50 outline outline-1 outline-zinc-500" : ""} ${isBeingDragged ? "opacity-40" : ""}`}
           >
             <ChevronRight className="cm-tree-chevron h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform" />
             <Folder className="cm-tree-folder h-4 w-4 shrink-0 text-[var(--nuza-accent)]" />

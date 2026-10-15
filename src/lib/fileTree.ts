@@ -159,6 +159,26 @@ export function findEntry(nodes: FileEntry[], path: string): FileEntry | null {
   return null;
 }
 
+/** A row selected in the sidebar's tree. */
+export interface TreeSelection {
+  path: string;
+  isDirectory: boolean;
+}
+
+/**
+ * Where a new file or folder goes from the sidebar's own buttons: into the
+ * folder selected in the tree, or beside the file selected - the way VS
+ * Code's explorer does it - and at the top of the vault with nothing
+ * selected, or a folder selected that has since gone from the tree. A file
+ * is taken at its word: the note open in the editor is selected whether or
+ * not its folder has been opened in the tree.
+ */
+export function createTarget(tree: FileEntry[], rootPath: string, selected: TreeSelection | null): string {
+  if (!selected || !isWithin(selected.path, rootPath) || samePath(selected.path, rootPath)) return rootPath;
+  if (!selected.isDirectory) return parentOf(selected.path);
+  return findEntry(tree, selected.path)?.isDirectory ? selected.path : rootPath;
+}
+
 /** Adds `entry` to the tree, under whichever directory its path names. */
 export function addEntry(tree: FileEntry[], rootPath: string, entry: FileEntry): FileEntry[] {
   const parent = parentOf(entry.path);
