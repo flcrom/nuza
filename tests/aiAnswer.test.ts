@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { forDisplay, isWebLink, parseAnswer, parseInline } from "../src/lib/ai/answerMarkdown";
+import {
+  forDisplay,
+  isWebLink,
+  parseAnswer,
+  parseInline,
+  withoutThinking,
+} from "../src/lib/ai/answerMarkdown";
 import { FRAMING_PHRASES, buildFollowUp, buildPrompt } from "../src/lib/ai/prompt";
 
 describe("an answer's Markdown", () => {
@@ -126,5 +132,23 @@ describe("an answer as it is shown", () => {
   test("an ordinary answer is left as it is", () => {
     const answer = "The release slips to **March**.\n\n- Beta first\n- Then GA";
     expect(forDisplay(answer)).toBe(answer);
+  });
+});
+
+describe("reasoning a model writes into its answer", () => {
+  test("a whole think block goes", () => {
+    expect(withoutThinking("<think>Hm, the user wants...</think>\n\nShorter.")).toBe("Shorter.");
+  });
+
+  test("so does what came before a closing tag that was never opened", () => {
+    expect(withoutThinking("Let me do these tasks.</think>Done: both failed.")).toBe("Done: both failed.");
+  });
+
+  test("and a think block still being written", () => {
+    expect(withoutThinking("Here it is.\n<think>maybe also")).toBe("Here it is.\n");
+  });
+
+  test("an answer without any is left as it is", () => {
+    expect(withoutThinking("Use `<b>` for bold.")).toBe("Use `<b>` for bold.");
   });
 });
