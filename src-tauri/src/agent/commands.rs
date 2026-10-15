@@ -289,7 +289,7 @@ mod tests {
             data_dirs: vec![],
         };
         let (title, body) = consent_notice(&custom, true);
-        assert_eq!(title, "Turn on node?");
+        assert_eq!(title, "Turn on mine?");
         assert!(
             body.ends_with("It will run:\nnode ~/agents/mine.js --acp"),
             "{body}"

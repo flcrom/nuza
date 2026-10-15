@@ -246,6 +246,14 @@ textarea,
   }
 }
 
+/* An answer, a step or a proposed edit arriving in the AI panel. */
+@keyframes nuza-ai-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
 @keyframes nuza-panel-in {
   from {
     opacity: 0;
@@ -359,6 +367,10 @@ textarea,
 
 .animate-panel-in {
   animation: nuza-panel-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-ai-in {
+  animation: nuza-ai-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-menu-in {
@@ -690,6 +702,7 @@ textarea,
   }
 
   .animate-fade-in,
+  .animate-ai-in,
   .animate-panel-in,
   .animate-menu-in,
   .animate-palette-in,

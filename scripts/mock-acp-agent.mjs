@@ -41,6 +41,10 @@
 //   OTHERCALL       the same for a server that is not nuza's
 //   REJECT_MODEL    the model that replaced the start one is turned down too
 //   REJECT_ALL      every model is turned down
+//   PROPOSE         proposes edits to the first two sentences of the note it
+//                   was sent, in a nuza-edits block
+//   PROPOSE_BADLY   the same, but with an anchor that is not in the note -
+//                   which it fixes when asked again ("could not be applied")
 
 import fs from "node:fs";
 import readline from "node:readline";
@@ -149,6 +153,34 @@ async function permissionFor(sessionId, toolCall) {
   return `${outcome?.outcome}/${outcome?.optionId ?? "-"}`;
 }
 
+/** The note in a prompt, as nuza wraps it, if there is one. */
+function noteIn(text) {
+  const match = /<note id="([^"]+)">\n([\s\S]*?)\n<\/note id="\1">/.exec(text);
+  return match ? match[2] : null;
+}
+
+/** Edits to the first two plain sentences of a note: what a real agent might suggest. */
+function editsFor(note) {
+  let inFrontmatter = note.startsWith("---");
+  const sentences = [];
+  for (const [index, line] of note.split("\n").entries()) {
+    if (inFrontmatter) {
+      if (index > 0 && line.trim() === "---") inFrontmatter = false;
+      continue;
+    }
+    const plain = line.trim();
+    if (!plain || plain.startsWith("#") || plain.startsWith("-") || plain.includes("⟦")) continue;
+    sentences.push(plain);
+  }
+  return sentences.slice(0, 2).map((find) => ({
+    find,
+    replace: find.replace(/\.$/, "") + ", put more plainly.",
+    why: "A mock edit, to try the review out.",
+  }));
+}
+
+const editsBlock = (edits) => "```nuza-edits\n" + JSON.stringify(edits, null, 2) + "\n```";
+
 async function prompt(id, { sessionId, prompt: parts }) {
   const session = sessions.get(sessionId);
   if (!session) return fail(id, "Session not found");
@@ -158,9 +190,23 @@ async function prompt(id, { sessionId, prompt: parts }) {
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("");
-  let reply = `You said: ${text}`;
+  // Only the question, as a real agent would answer it - not nuza's framing.
+  const asked = /(?:Their question|The change they want[^:\n]*):\n([\s\S]*)$/.exec(text);
+  let reply = `You said: ${asked ? asked[1] : text}`;
 
   if (text.includes("STALL")) return void stalled.set(sessionId, id);
+
+  // The note a session was last sent, for an edit asked for again.
+  const note = noteIn(text);
+  if (note !== null) session.note = note;
+  if (text.includes("PROPOSE") && session.note) {
+    const edits = editsFor(session.note);
+    if (text.includes("PROPOSE_BADLY"))
+      edits[0] = { ...edits[0], find: "A sentence that is not in the note." };
+    reply = `Here are ${edits.length} changes.\n\n${editsBlock(edits)}`;
+  } else if (text.includes("could not be applied") && session.note) {
+    reply = `Fixed.\n\n${editsBlock(editsFor(session.note).slice(0, 1))}`;
+  }
 
   if (text.includes("CRASH")) {
     process.stderr.write("npm error code EACCES\nnpm error path /Users/me/.npm/_cacache\n");

@@ -10,6 +10,26 @@
  * it is.
  */
 
+import { SELECTION_END, SELECTION_START } from "./markers";
+import { FRAMING_PHRASES } from "./prompt";
+
+/** nuza's delimiter around the note, which is never part of an answer. */
+const NOTE_TAG = /<\/?note id="[^"\n]*">/g;
+
+/**
+ * An answer as it is shown: without the note's delimiter tags, the
+ * selection marks, or any line that recites nuza's own framing. What the
+ * agent was told stays between nuza and the agent.
+ */
+export function forDisplay(answer: string): string {
+  const cleaned = answer.replace(NOTE_TAG, "").split(SELECTION_START).join("").split(SELECTION_END).join("");
+  return cleaned
+    .split("\n")
+    .filter((line) => !FRAMING_PHRASES.some((phrase) => line.includes(phrase)))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 export type Inline =
   | { type: "text"; text: string }
   | { type: "code"; text: string }
