@@ -14,7 +14,7 @@ import { cn } from "cn";
 import { useAgent } from "@/hooks/useAgent";
 import { useAiChat, type ChatTurn, type Selected } from "@/hooks/useAiChat";
 import { buildContext, selectionLines, type AiContext } from "@/lib/ai/context";
-import { chooseModel, modelToUse, type ModelChoices } from "@/lib/ai/modelChoice";
+import { agentKey, chooseModel, modelToUse, type ModelChoices } from "@/lib/ai/modelChoice";
 import type { Intent } from "@/lib/ai/prompt";
 import type { ModelInfo } from "@/lib/ai/protocol";
 import { contextUsed } from "@/lib/ai/transcript";
@@ -199,6 +199,14 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
   // read again (they may have just turned an agent on), and either the agent
   // is started ahead of the question or what is installed is looked for.
   const { refresh, warm, detect, listModels } = agent;
+  // Another agent's models mean nothing to this one: until this one has
+  // said what it offers, there are none to pick from.
+  const agentNow = agentKey(config);
+  const [modelsFor, setModelsFor] = useState(agentNow);
+  if (modelsFor !== agentNow) {
+    setModelsFor(agentNow);
+    setModels([]);
+  }
   useEffect(() => {
     if (isOpen) void refresh();
   }, [isOpen, refresh]);

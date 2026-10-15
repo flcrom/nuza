@@ -212,6 +212,7 @@ pub fn run() {
             agent::commands::agent_find_command,
             agent::commands::agent_use,
             agent::commands::agent_turn_off,
+            agent::commands::agent_set_enabled,
             agent::commands::agent_warm,
             agent::commands::agent_list_models,
             agent::commands::agent_prompt,

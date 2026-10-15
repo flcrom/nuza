@@ -47,12 +47,24 @@
 //   PROPOSE_BADLY   the same, but with an anchor that is not in the note -
 //                   which it fixes when asked again ("could not be applied")
 
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import readline from "node:readline";
 
 const flavor = process.argv.includes("--flavor")
   ? process.argv[process.argv.indexOf("--flavor") + 1]
   : "codex";
+
+// --spawn-child FILE: starts a process of its own that would outlive the
+// mock, and writes its id to FILE - for checking that stopping an agent
+// stops what it started, as `npx` starts the adapter.
+if (process.argv.includes("--spawn-child")) {
+  const file = process.argv[process.argv.indexOf("--spawn-child") + 1];
+  const child = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  fs.writeFileSync(file, String(child.pid));
+}
 
 const MODES = {
   codex: { current: "auto", available: ["read-only", "auto", "full-access"] },
@@ -96,10 +108,17 @@ function askClient(method, params) {
   });
 }
 
-const OFFERED = flavor === "codex" ? ["current[low]", "backup[low]"] : ["sonnet", "haiku"];
+// "subscription": a plan with a provider whose models all need a subscription
+// it does not have, as OpenCode's Go models do.
+const OFFERED =
+  flavor === "codex"
+    ? ["current[low]", "backup[low]"]
+    : flavor === "subscription"
+      ? ["go/alpha", "go/beta", "zen/pickle"]
+      : ["sonnet", "haiku"];
 
 function modelsOf(session) {
-  if (flavor === "codex") {
+  if (flavor === "codex" || flavor === "subscription") {
     return {
       models: {
         currentModelId: session.model,
@@ -357,6 +376,13 @@ async function prompt(id, { sessionId, prompt: parts }) {
     return fail(id, `The '${name}' model is not supported when using Codex with a ChatGPT account.`);
   }
 
+  // Refused without naming the model, as OpenCode does.
+  if (flavor === "subscription" && session.model.startsWith("go/"))
+    return fail(
+      id,
+      "Upstream request failed: An active OpenCode Go subscription is required to use Go models."
+    );
+
   if (text.includes("SHOW_MODEL")) reply = `model ${session.model}`;
   if (text.includes("WHICH_MODE")) reply = `mode ${session.mode}`;
   if (text.includes("SHOW_MCP")) reply = `mcp ${JSON.stringify(session.mcpServers)}`;
@@ -436,7 +462,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       const sessionId = `mock-session-${++sessionCounter}`;
       const session = {
         mode: MODES[flavor]?.current ?? "none",
-        model: flavor === "codex" ? "retired[low]" : "sonnet",
+        model: flavor === "codex" ? "retired[low]" : flavor === "subscription" ? "go/alpha" : "sonnet",
         mcpServers: params.mcpServers,
         cwd: params.cwd,
       };

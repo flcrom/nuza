@@ -54,12 +54,14 @@ fn login_shell_path() -> Option<OsString> {
     // On a thread of its own, so a shell that never finishes is only waited
     // on for as long as it deserves.
     std::thread::spawn(move || {
-        let output = Command::new(shell)
+        let mut command = Command::new(shell);
+        command
             .arg("-ilc")
             .arg(format!("printf '{MARKER}%s{MARKER}' \"$PATH\""))
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
+            .stderr(Stdio::null());
+        crate::agent::start::leave_appimage_std(&mut command);
+        let output = command.output();
         let _ = sender.send(output);
     });
 

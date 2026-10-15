@@ -22,6 +22,7 @@ import {
   keepThread,
   loadThreads,
   newThreadId,
+  pruneAllThreads,
   titleFor,
   type SavedTurn,
   type Thread,
@@ -233,8 +234,10 @@ export function useAiChat(agent: string, access: NoteAccess) {
     setTurns(turns);
   }, []);
 
-  // The vault's threads, with the latest open as it was left.
+  // The vault's threads, with the latest open as it was left - and every
+  // vault's week-old ones cleared out on the way.
   useEffect(() => {
+    pruneAllThreads();
     const kept = loadThreads(vault);
     setThreads(kept);
     open(kept[0] ?? null);

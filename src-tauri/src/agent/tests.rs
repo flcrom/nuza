@@ -45,6 +45,60 @@ fn start(command: Command) -> Agent {
     Agent { client, inbound }
 }
 
+/// Whether a process is still running.
+fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 only asks whether the process is there.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .any(|word| word == pid.to_string())
+    }
+}
+
+/// What the agent starts - as `npx` starts the adapter - is stopped with it,
+/// on every platform: by its process group on Unix, its tree on Windows.
+#[tokio::test]
+async fn stopping_an_agent_stops_what_it_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("child.pid");
+    let mut command = mock("claude");
+    command.arg("--spawn-child").arg(&file);
+    let agent = start(command);
+    let mut pid = None;
+    for _ in 0..100 {
+        if let Some(read) = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok())
+        {
+            pid = Some(read);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let pid = pid.expect("the mock started its child");
+    assert!(alive(pid), "the child is running");
+
+    agent.client.kill().await;
+    let mut gone = false;
+    for _ in 0..50 {
+        if !alive(pid) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "the agent's child outlived it");
+}
+
 /// Starts the mock, says hello, and opens a session it will answer in.
 async fn session(flavor: &str) -> (Agent, String) {
     let agent = start(mock(flavor));
@@ -956,6 +1010,24 @@ async fn switches_again_when_a_prompt_is_turned_down() {
     h.harness.new_chat("main").await;
     let (panel, _) = ask(&h.harness, "main", "SHOW_MODEL").await;
     assert_eq!(panel.said(), "model backup[low]");
+}
+
+#[tokio::test]
+async fn a_model_that_needs_a_subscription_is_left_with_the_rest_of_its_provider() {
+    // Starts on go/alpha; every go/ model needs a subscription the plan lacks,
+    // and the refusal does not say which model it was.
+    let h = harnessed("subscription").await;
+    let (panel, outcome) = ask(&h.harness, "main", "SHOW_MODEL").await;
+    assert!(outcome.is_ok(), "{:?}", panel.events());
+    assert_eq!(panel.said(), "model zen/pickle");
+
+    // The panel asking for the refused model again does not move it back.
+    let again = Panel::default();
+    h.harness
+        .prompt("main", None, "SHOW_MODEL", Some("go/alpha"), again.emit())
+        .await
+        .unwrap();
+    assert_eq!(again.said(), "model zen/pickle");
 }
 
 #[tokio::test]

@@ -15,6 +15,8 @@ const claude = offered(
   ["claude-haiku-4-5-20251001", "Haiku 4.5"]
 );
 const opencode = offered(
+  // Listed first, and "free" - but a Go model, which needs a Go subscription.
+  ["opencode-go/cat-jam-free", "OpenCode Go/Cat Jam Free"],
   ["opencode-go/deepseek-v4-pro", "OpenCode Go/DeepSeek V4 Pro (New)"],
   ["opencode-go/glm-5.3-flash", "OpenCode Go/GLM-5.3-Flash"],
   ["opencode/big-pickle", "OpenCode/Big Pickle"],
@@ -32,7 +34,7 @@ describe("the cheapest model", () => {
     expect(cheapestModel(claude)).toBe("haiku");
   });
 
-  test("for OpenCode is a free one", () => {
+  test("for OpenCode is a free one that needs no subscription", () => {
     expect(cheapestModel(opencode)).toBe("opencode/big-pickle");
   });
 

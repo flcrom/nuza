@@ -818,6 +818,14 @@ impl AgentHarness {
     ) -> Result<String, String> {
         let params = json!({ "sessionId": session, "prompt": [{ "type": "text", "text": text }] });
         let mut tried = HashSet::new();
+        // The model the session is on: a refusal does not always name it.
+        let mut current = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .find(|kept| kept.id == session)
+            .and_then(|kept| kept.model.clone());
         loop {
             match self.answer(connection, session, params.clone()).await {
                 Ok(answer) => {
@@ -828,7 +836,7 @@ impl AgentHarness {
                         .to_string())
                 }
                 Err(error) if is_model_refused(&error) && tried.len() < MAX_MODEL_SWITCHES => {
-                    let Some(next) = self.next_model(&error, &mut tried) else {
+                    let Some(next) = self.next_model(&error, &mut tried, current.as_deref()) else {
                         return Err(error);
                     };
                     if set_model(&connection.client, config, session, &next.id)
@@ -836,6 +844,18 @@ impl AgentHarness {
                         .is_err()
                     {
                         return Err(error);
+                    }
+                    current = Some(next.id.clone());
+                    // The session is on it now, so a later question asking for
+                    // the refused one does not move it back.
+                    if let Some(kept) = self
+                        .sessions
+                        .lock()
+                        .await
+                        .values_mut()
+                        .find(|kept| kept.id == session)
+                    {
+                        kept.model = Some(next.id.clone());
                     }
                     let _ = connection.inbound.send(Inbound {
                         method: TURN_NOTICE.to_string(),
@@ -901,6 +921,11 @@ impl AgentHarness {
         window: &str,
         model: &str,
     ) -> Result<(), String> {
+        // Asked again for a model the plan has turned down: the session stays
+        // on the one it moved to.
+        if locked(&self.models).rejected.contains(model_name(model)) {
+            return Ok(());
+        }
         let mut sessions = self.sessions.lock().await;
         let Some(session) = sessions.get_mut(window) else {
             return Ok(());
@@ -957,15 +982,32 @@ impl AgentHarness {
     /// After the plan turned a question down for its model: that model is
     /// never picked again, and the next one offered is. `tried` keeps one
     /// question from going round in circles.
-    fn next_model(&self, error: &str, tried: &mut HashSet<String>) -> Option<ModelInfo> {
-        if let Some(name) = refused_model(error) {
+    fn next_model(
+        &self,
+        error: &str,
+        tried: &mut HashSet<String>,
+        current: Option<&str>,
+    ) -> Option<ModelInfo> {
+        let refused = refused_model(error).or_else(|| current.map(|id| model_name(id).to_string()));
+        if let Some(name) = &refused {
             locked(&self.models).rejected.insert(name.clone());
-            tried.insert(name);
+            tried.insert(name.clone());
         }
-        let next = self
-            .usable_models()
-            .into_iter()
-            .find(|model| !tried.contains(model_name(&model.id)))?;
+        // A plan without the subscription one provider's model needs has none
+        // of that provider's models: `opencode-go/a` refused, `opencode-go/b`
+        // will be too.
+        let skip = refused
+            .filter(|_| needs_subscription(error))
+            .and_then(|name| {
+                name.split_once('/')
+                    .map(|(provider, _)| format!("{provider}/"))
+            });
+        let next = self.usable_models().into_iter().find(|model| {
+            !tried.contains(model_name(&model.id))
+                && !skip
+                    .as_deref()
+                    .is_some_and(|provider| model.id.starts_with(provider))
+        })?;
         tried.insert(model_name(&next.id).to_string());
         Some(next)
     }
@@ -1205,10 +1247,22 @@ fn model_name(id: &str) -> &str {
     id.split('[').next().unwrap_or(id)
 }
 
-/// Whether an error is the plan turning a model down.
+/// Whether an error is the plan turning a model down: one it does not offer,
+/// or one it needs a subscription for.
 fn is_model_refused(error: &str) -> bool {
-    let error = error.to_lowercase();
-    error.contains("model") && (error.contains("not supported") || error.contains("not available"))
+    let lower = error.to_lowercase();
+    (lower.contains("model")
+        && (lower.contains("not supported") || lower.contains("not available")))
+        || needs_subscription(error)
+}
+
+/// "An active OpenCode Go subscription is required to use Go models", or a
+/// free tier that will not answer here.
+fn needs_subscription(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("subscription is required")
+        || lower.contains("subscription required")
+        || lower.contains("free tier can only be used")
 }
 
 /// The model named in quotes in such an error: "The 'gpt-5.6-sol' model is
@@ -1317,6 +1371,25 @@ mod tests {
     fn without_anything_to_go_on_the_model_is_left_alone() {
         assert_eq!(pick_model(None, &OFFERED), None);
         assert_eq!(pick_model(Some("sol[low]"), &[]), None);
+    }
+
+    #[test]
+    fn a_model_the_plan_needs_a_subscription_for_counts_as_refused() {
+        assert!(is_model_refused(
+            "Internal error: Upstream request failed: An active OpenCode Go subscription is required to use Go models."
+        ));
+        assert!(is_model_refused(
+            "Internal error: OpenCode's free tier can only be used from within OpenCode."
+        ));
+        assert!(needs_subscription(
+            "An active OpenCode Go subscription is required"
+        ));
+        assert!(!is_model_refused(
+            "Internal error: rate limited, try again later"
+        ));
+        assert!(!needs_subscription(
+            "The 'gpt-5.6-sol' model is not supported"
+        ));
     }
 
     #[test]

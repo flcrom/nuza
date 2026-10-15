@@ -67,6 +67,96 @@ pub(crate) fn sessions_root() -> PathBuf {
     temp_root().join(SESSIONS)
 }
 
+/// The environment changes a program started from inside an AppImage needs,
+/// given the variables nuza was started with and the AppImage's mount point
+/// (`APPDIR`): every entry pointing into the AppImage taken out, and a
+/// variable left with nothing removed. The AppImage puts its own libraries
+/// first in `LD_LIBRARY_PATH` and its own GTK modules in others; a system
+/// `node` or agent that inherits them loads libraries it was not built
+/// against, and can fail to start at all.
+pub(crate) fn outside_appimage(
+    vars: impl IntoIterator<Item = (String, String)>,
+    appdir: &str,
+) -> Vec<(String, Option<String>)> {
+    let appdir = appdir.trim_end_matches('/');
+    if appdir.is_empty() {
+        return Vec::new();
+    }
+    let inside = |entry: &str| entry == appdir || entry.starts_with(&format!("{appdir}/"));
+    let mut changes = Vec::new();
+    for (key, value) in vars {
+        if key == "NUZA_APPIMAGE_RESTARTED" {
+            changes.push((key, None));
+            continue;
+        }
+        if !value.contains(appdir) {
+            continue;
+        }
+        let kept: Vec<&str> = value.split(':').filter(|entry| !inside(entry)).collect();
+        let kept = kept.join(":");
+        if kept == value {
+            continue;
+        }
+        changes.push((key, (!kept.is_empty()).then_some(kept)));
+    }
+    changes
+}
+
+/// Applies [`outside_appimage`] to `command`, when nuza is running from one.
+pub(crate) fn leave_appimage(command: &mut Command) {
+    for (key, value) in appimage_changes() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+}
+
+/// The same, for a standard library command.
+pub(crate) fn leave_appimage_std(command: &mut std::process::Command) {
+    for (key, value) in appimage_changes() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+}
+
+fn appimage_changes() -> Vec<(String, Option<String>)> {
+    if !cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_none() {
+        return Vec::new();
+    }
+    let Some(appdir) = std::env::var("APPDIR").ok() else {
+        return Vec::new();
+    };
+    outside_appimage(std::env::vars(), &appdir)
+}
+
+/// Windows gives every console program started from a windowed app a
+/// console window of its own, which flashes up and stays while it runs.
+/// Agents, `npx` and `--version` checks are all console programs.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Starts `command` without a console window of its own, on Windows.
+pub(crate) fn no_window(command: &mut Command) {
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// The same, for a standard library command.
+pub(crate) fn no_window_std(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 /// The command that starts `config`'s agent.
 pub(crate) fn command_for(config: &AgentConfig) -> Result<Command, String> {
     let path = crate::shellpath::path();
@@ -90,6 +180,8 @@ pub(crate) fn command_for(config: &AgentConfig) -> Result<Command, String> {
 
     let mut command = fenced(&program, &launch, home.as_deref(), &path, &scratch)
         .map_err(|error| format!("could not start {name}: {error}"))?;
+    no_window(&mut command);
+    leave_appimage(&mut command);
     command
         .env("PATH", &path)
         .env("TMPDIR", &scratch)
@@ -283,6 +375,39 @@ fn unfenced(program: &Path, launch: &Launch) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_started_from_an_appimage_does_not_inherit_its_libraries() {
+        let vars = [
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_nuzaX/usr/lib:/usr/local/lib",
+            ),
+            ("GIO_MODULE_DIR", "/tmp/.mount_nuzaX/usr/lib/gio/modules"),
+            ("XDG_DATA_DIRS", "/tmp/.mount_nuzaX/usr/share:/usr/share"),
+            ("PATH", "/usr/bin:/bin"),
+            ("NUZA_APPIMAGE_RESTARTED", "1"),
+            // Not inside it, only named like it.
+            ("NOTES", "/tmp/.mount_nuzaXY/notes"),
+        ]
+        .map(|(key, value)| (key.to_string(), value.to_string()));
+        let changes = outside_appimage(vars, "/tmp/.mount_nuzaX/");
+        let change = |key: &str| {
+            changes
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(
+            change("LD_LIBRARY_PATH"),
+            Some(Some("/usr/local/lib".into()))
+        );
+        assert_eq!(change("GIO_MODULE_DIR"), Some(None));
+        assert_eq!(change("XDG_DATA_DIRS"), Some(Some("/usr/share".into())));
+        assert_eq!(change("NUZA_APPIMAGE_RESTARTED"), Some(None));
+        assert_eq!(change("PATH"), None);
+        assert_eq!(change("NOTES"), None);
+    }
 
     #[test]
     fn a_download_stopped_part_way_is_cleared_and_a_finished_one_kept() {
