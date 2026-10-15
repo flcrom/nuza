@@ -302,7 +302,7 @@ pub(crate) fn open_window(
     let backdrop = window.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(error) = crate::window::apply_transparency(&backdrop, true) {
-            eprintln!("nuza: no window backdrop on this platform: {}", error);
+            log::warn!("no window backdrop on this platform: {}", error);
         }
     });
     raise(&window);
@@ -317,7 +317,7 @@ pub(crate) fn open_window_soon(app: &tauri::AppHandle, target: Option<OpenTarget
     let app = app.clone();
     std::thread::spawn(move || {
         if let Err(error) = open_window(&app, target, None) {
-            eprintln!("nuza: could not open a window: {}", error);
+            log::warn!("could not open a window: {}", error);
         }
     });
 }
@@ -338,7 +338,7 @@ pub(crate) fn open_path(app: &tauri::AppHandle, target: OpenTarget) {
         }
         Route::Fresh => {
             if let Err(error) = open_window(app, Some(target), None) {
-                eprintln!("nuza: could not open a window: {}", error);
+                log::warn!("could not open a window: {}", error);
             }
         }
     }
@@ -605,7 +605,7 @@ pub(crate) fn save_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
         let _ = std::fs::create_dir_all(directory);
     }
     if let Err(error) = crate::files::write_atomically(&path, &json) {
-        eprintln!("nuza: could not keep the open windows: {}", error);
+        log::warn!("could not keep the open windows: {}", error);
     }
 }
 
@@ -683,7 +683,7 @@ pub(crate) fn restore_windows(app: &tauri::AppHandle, launched: Option<&OpenTarg
                 vault: None,
             };
             if let Err(error) = open_window(&app, Some(target), window.frame) {
-                eprintln!("nuza: could not bring a window back: {}", error);
+                log::warn!("could not bring a window back: {}", error);
             }
         }
     });

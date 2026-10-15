@@ -113,5 +113,9 @@ jobs:
 
       # The unit tests run on all three platforms for the same reason clippy
       # does: file permissions and renames are where the platforms differ most.
+      # On Linux the fence's own tests must run against the kernel, not skip:
+      # a runner without Landlock fails here rather than passing quietly.
       - name: test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+        env:
+          NUZA_REQUIRE_LANDLOCK: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}

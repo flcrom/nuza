@@ -417,7 +417,9 @@ export default function AiSettings({
     if (!state) return null;
     return state.sandboxed
       ? "Agents run fenced in on this computer: they see only what nuza sends them, and can't change your notes or any of your files."
-      : "This computer can't fence the agent in, so it runs with your own permissions.";
+      : `This computer can't fence the agent in, so it runs with your own permissions.${
+          state.unfencedBecause ? ` ${state.unfencedBecause}` : ""
+        }`;
   }, [state]);
 
   return (

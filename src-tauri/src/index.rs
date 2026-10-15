@@ -252,7 +252,7 @@ impl VaultIndex {
                 done();
             });
         if let Err(error) = spawned {
-            eprintln!("nuza: could not start indexing the vault: {}", error);
+            log::warn!("could not start indexing the vault: {}", error);
         }
     }
 

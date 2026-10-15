@@ -412,6 +412,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       // sends, and a real agent turns it down.
       if (typeof params.protocolVersion !== "number")
         return fail(id, "protocolVersion must be a number", -32602);
+      // Run strict, it turns down a client that offers anything at all: no
+      // file reads or writes, no terminal - nothing for an agent to ask for.
+      if (process.argv.includes("--strict-client") && JSON.stringify(params.clientCapabilities) !== "{}")
+        return fail(
+          id,
+          `clientCapabilities must be {}, got ${JSON.stringify(params.clientCapabilities)}`,
+          -32602
+        );
       respond(id, {
         protocolVersion: 1,
         agentCapabilities: {

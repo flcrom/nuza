@@ -63,7 +63,7 @@ pub(crate) fn adopt_folder<R: tauri::Runtime>(
     // A folder that cannot be watched is still a folder worth opening; what is
     // lost is the notice, not the vault.
     if let Err(error) = watch_vault(window, &resolved) {
-        eprintln!("nuza: not watching \"{}\" for changes: {}", path, error);
+        log::warn!("not watching \"{}\" for changes: {}", path, error);
     }
 
     let announced = window.clone();

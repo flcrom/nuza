@@ -55,6 +55,8 @@ export interface AgentState {
   agent: AgentConfig | null;
   label: string | null;
   sandboxed: boolean;
+  /** Why it is not fenced in, where that is worth saying. */
+  unfencedBecause: string | null;
   webLookups: boolean;
   hasVault: boolean;
   /** Whether the agent may search this vault with nuza's read-only tools. */

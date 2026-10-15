@@ -23,10 +23,28 @@ pub(crate) fn sandboxed() -> bool {
     {
         Path::new(SANDBOX_EXEC).exists()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        super::confine::abi().is_some()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         false
     }
+}
+
+/// Why this computer cannot fence the agent in, when it cannot.
+pub(crate) fn unfenced_because() -> Option<&'static str> {
+    if sandboxed() {
+        return None;
+    }
+    Some(if cfg!(target_os = "macos") {
+        "macOS's sandbox-exec is missing from this Mac."
+    } else if cfg!(target_os = "linux") {
+        "This Linux kernel has no Landlock, which nuza uses to fence agents in (it needs Linux 5.13 or newer, with Landlock turned on)."
+    } else {
+        "nuza has no way to fence a program in on Windows."
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -70,7 +88,8 @@ pub(crate) fn command_for(config: &AgentConfig) -> Result<Command, String> {
     std::fs::create_dir_all(&scratch)
         .map_err(|error| format!("could not start {name}: no scratch folder: {error}"))?;
 
-    let mut command = fenced(&program, &launch, home.as_deref(), &path, &scratch);
+    let mut command = fenced(&program, &launch, home.as_deref(), &path, &scratch)
+        .map_err(|error| format!("could not start {name}: {error}"))?;
     command
         .env("PATH", &path)
         .env("TMPDIR", &scratch)
@@ -104,20 +123,20 @@ pub(crate) fn repair_npm_cache(cache: &Path) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn fenced(
+/// What the agent may read and write, for `program` started as `launch`:
+/// the policy both fences are built from.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn fence_for(
     program: &Path,
     launch: &Launch,
     home: Option<&Path>,
     path: &OsStr,
     scratch: &Path,
-) -> Command {
-    use super::sandbox::{node_roots, profile, program_dirs, Fence};
+) -> super::sandbox::Fence {
+    use super::sandbox::{node_roots, program_dirs, Fence};
 
-    if !sandboxed() {
-        log::warn!("there is no sandbox-exec on this Mac; the agent runs without a fence");
-        return unfenced(program, launch);
-    }
+    // Each path as it is given, and as it really is when that is elsewhere:
+    // both fences match real paths.
     let real = |paths: &[PathBuf]| -> Vec<PathBuf> {
         let mut all = Vec::new();
         for path in paths {
@@ -154,13 +173,59 @@ fn fenced(
             }
         }
     }
-    let fence = Fence {
+    // On Linux nothing outside the system's folders is readable unless it is
+    // opened up: so also where the program and Node are installed, wherever
+    // that is (Homebrew on Linux, for one, is in /home/linuxbrew). Never a
+    // folder home is inside.
+    if cfg!(target_os = "linux") {
+        let node = resolve_command("node", path);
+        for found in [Some(program.to_path_buf()), node].into_iter().flatten() {
+            for binary in [found.clone(), found.canonicalize().unwrap_or(found)] {
+                if let Some(root) = install_root(&binary) {
+                    if !home.is_some_and(|home| home.starts_with(&root)) {
+                        read_dirs.push(root);
+                    }
+                }
+            }
+        }
+    }
+    Fence {
         home: home.map(|home| home.canonicalize().unwrap_or_else(|_| home.to_path_buf())),
         state_dirs: real(&launch.state_dirs),
         state_files: real(&launch.state_files),
         read_dirs: real(&read_dirs),
         scratch: Some(scratch.to_path_buf()),
+    }
+}
+
+/// The folder a program is installed in: the one above its `bin`, or its own.
+/// Never the root.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn install_root(binary: &Path) -> Option<PathBuf> {
+    let dir = binary.parent()?;
+    let root = if dir.file_name().is_some_and(|name| name == "bin") {
+        dir.parent()?
+    } else {
+        dir
     };
+    (root.parent().is_some()).then(|| root.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn fenced(
+    program: &Path,
+    launch: &Launch,
+    home: Option<&Path>,
+    path: &OsStr,
+    scratch: &Path,
+) -> Result<Command, String> {
+    use super::sandbox::profile;
+
+    if !sandboxed() {
+        log::warn!("there is no sandbox-exec on this Mac; the agent runs without a fence");
+        return Ok(unfenced(program, launch));
+    }
+    let fence = fence_for(program, launch, home, path, scratch);
     let mut command = Command::new(SANDBOX_EXEC);
     command
         .arg("-p")
@@ -168,13 +233,45 @@ fn fenced(
         .arg("--")
         .arg(program)
         .args(&launch.args);
-    command
+    Ok(command)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn fenced(program: &Path, launch: &Launch, _: Option<&Path>, _: &OsStr, _: &Path) -> Command {
+#[cfg(target_os = "linux")]
+fn fenced(
+    program: &Path,
+    launch: &Launch,
+    home: Option<&Path>,
+    path: &OsStr,
+    scratch: &Path,
+) -> Result<Command, String> {
+    use super::confine::{abi, confine, rules, system_reads, Ruleset};
+
+    let Some(version) = abi() else {
+        log::warn!("this kernel has no Landlock; the agent runs with the user's permissions");
+        return Ok(unfenced(program, launch));
+    };
+    let fence = fence_for(program, launch, home, path, scratch);
+    let rules = rules(&fence, &system_reads(&temp_root()));
+    // The consent dialog said it would be fenced in: if the fence cannot be
+    // built, it does not start.
+    let ruleset =
+        Ruleset::build(&rules).map_err(|error| format!("could not fence the agent in: {error}"))?;
+    log::info!("fencing the agent in with Landlock v{version}");
+    let mut command = unfenced(program, launch);
+    confine(&mut command, ruleset);
+    Ok(command)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn fenced(
+    program: &Path,
+    launch: &Launch,
+    _: Option<&Path>,
+    _: &OsStr,
+    _: &Path,
+) -> Result<Command, String> {
     log::warn!("no sandbox for the agent on this system; it runs with the user's permissions");
-    unfenced(program, launch)
+    Ok(unfenced(program, launch))
 }
 
 fn unfenced(program: &Path, launch: &Launch) -> Command {

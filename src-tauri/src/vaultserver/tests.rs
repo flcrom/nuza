@@ -56,6 +56,7 @@ fn server() -> VaultServer {
     VaultServer {
         url: format!("http://127.0.0.1:{PORT}/mcp"),
         grants: Arc::default(),
+        accepting: None,
     }
 }
 
@@ -453,4 +454,33 @@ async fn it_answers_over_a_real_socket_on_loopback() {
     stream.read_to_string(&mut answer).await.unwrap();
     assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
     assert!(answer.contains("over the wire"), "{answer}");
+}
+
+#[tokio::test]
+async fn stopped_it_closes_its_port_and_its_tokens_read_nothing() {
+    let opened = open(&[("a.md", "words")]);
+    let server = VaultServer::start().unwrap();
+    let token = server.grant(opened.vault).unwrap();
+    let port: u16 = server
+        .url()
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .trim_end_matches("/mcp")
+        .parse()
+        .unwrap();
+    assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+
+    server.stop();
+    // The listener goes when the loop holding it is next polled.
+    let mut closed = false;
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        if TcpStream::connect(("127.0.0.1", port)).await.is_err() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "the port is still open");
+    assert!(server.grants().get(&token).is_none());
 }
