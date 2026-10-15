@@ -1,4 +1,5 @@
 import { Check, ChevronRight, FileText, LoaderCircle, X } from "lucide-react";
+import { tookFor } from "@/lib/ai/time";
 import type { ChatTurn, EditCard } from "@/hooks/useAiChat";
 import type { AgentErrorKind } from "@/lib/ai/protocol";
 import { forDisplay } from "@/lib/ai/answerMarkdown";
@@ -165,14 +166,6 @@ interface TurnViewProps {
   /** What to call the agent: its own name, never nuza's. */
   agent: string;
   actions: TurnActions;
-}
-
-/** How long something took, the way a person would say it. */
-export function tookFor(milliseconds: number): string {
-  const seconds = Math.max(1, Math.round(milliseconds / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
 }
 
 /** The writer's message: what it is about, the action if it was one, and their words. */

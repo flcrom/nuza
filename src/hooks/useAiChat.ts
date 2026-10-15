@@ -6,6 +6,7 @@ import type { AiContext } from "@/lib/ai/context";
 import { buildFollowUp, buildPrompt, markedNote, type Intent } from "@/lib/ai/prompt";
 import type { AgentEvent } from "@/lib/ai/protocol";
 import {
+  type Scope,
   afterRetry,
   againstLiveNote,
   hasEditsBlock,
@@ -15,7 +16,16 @@ import {
   type Proposal,
 } from "@/lib/ai/proposals";
 import { applyEvent, answerText, emptyAnswer, type Answer } from "@/lib/ai/transcript";
-import { CONVERSATION_CLEARED, loadConversation, saveConversation, type SavedTurn } from "@/lib/ai/memory";
+import {
+  CONVERSATION_CLEARED,
+  forgetThread,
+  keepThread,
+  loadThreads,
+  newThreadId,
+  titleFor,
+  type SavedTurn,
+  type Thread,
+} from "@/lib/ai/memory";
 import { PROPOSAL_EVENT, setProposals, type ProposalEventDetail } from "@/lib/markdown/aiDiff";
 
 /**
@@ -32,9 +42,32 @@ export interface EditCard {
   status: EditStatus;
 }
 
+/**
+ * What the writer selected when they asked for a change to just that: where
+ * it was in the editor, and what it said. Edits for it go inside it.
+ */
+export interface Selected {
+  from: number;
+  to: number;
+  text: string;
+}
+
+/** Where `selected` is in the note as it is now, if it is still there. */
+function scopeIn(live: string, selected: Selected | null): Scope | null {
+  if (!selected || !selected.text) return null;
+  if (live.slice(selected.from, selected.to) === selected.text)
+    return { from: selected.from, to: selected.to };
+  const first = live.indexOf(selected.text);
+  if (first !== -1 && live.indexOf(selected.text, first + 1) === -1)
+    return { from: first, to: first + selected.text.length };
+  return null;
+}
+
 export interface TurnEdits {
   /** The note they are for. */
   path: string;
+  /** The selection they must stay inside, when the change was asked for it alone. */
+  selected?: Selected | null;
   cards: EditCard[];
   /** Waiting on the one retry, for edits whose text did not line up. */
   aligning: boolean;
@@ -77,6 +110,8 @@ export interface AskInput {
   context: AiContext | null;
   intent: Intent;
   model: string | null;
+  /** For a change to the selection alone: the selection, which its edits stay inside. */
+  selected?: Selected | null;
 }
 
 export interface NoteAccess {
@@ -131,6 +166,8 @@ const PROBLEMS: Record<string, string> = {
   overlap: "The suggested changes overlapped each other, so none are shown.",
 };
 
+const OUTSIDE = "A suggested change was outside what you selected, so it was left out.";
+
 function cardsFor(proposals: Proposal[], status: EditStatus): EditCard[] {
   return proposals.map(({ id, find, replace, why }) => ({ id, find, replace, why, status }));
 }
@@ -180,26 +217,43 @@ export function useAiChat(agent: string, access: NoteAccess) {
   const declined = useRef<{ find: string; replace: string }[]>([]);
   const cards = useRef(new Map<string, EditCard>());
 
-  // The vault's conversation, back as it was left.
-  useEffect(() => {
-    const saved = loadConversation(vault);
-    setTurns(saved.map((turn) => restored(turn, ++nextId.current)));
-  }, [vault]);
+  /** The vault's threads, newest first, and the one open in the panel. */
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadId, setThreadId] = useState(() => newThreadId());
+  /** The finished turns as a thread was opened: not a change, so not saved. */
+  const opened = useRef("");
 
-  // Cleared from Settings, it goes from the panel too - and the agent starts
-  // a conversation that does not have it.
+  /** Puts `thread`'s turns in the panel - or none, for a new one. */
+  const open = useCallback((thread: Thread | null) => {
+    const turns = thread ? thread.turns.map((turn) => restored(turn, ++nextId.current)) : [];
+    opened.current = turns.map((turn) => `${turn.id}:${turn.answer.state}`).join(",");
+    lastNote.current = null;
+    declined.current = [];
+    setThreadId(thread?.id ?? newThreadId());
+    setTurns(turns);
+  }, []);
+
+  // The vault's threads, with the latest open as it was left.
+  useEffect(() => {
+    const kept = loadThreads(vault);
+    setThreads(kept);
+    open(kept[0] ?? null);
+  }, [vault, open]);
+
+  // Cleared from Settings, they go from the panel too - and the agent starts
+  // a conversation that does not have them.
   useEffect(() => {
     function onCleared(event: Event) {
       if ((event as CustomEvent<string | null>).detail !== vault) return;
-      lastNote.current = null;
-      setTurns([]);
+      setThreads([]);
+      open(null);
       invoke("agent_new_chat").catch(() => {});
     }
     window.addEventListener(CONVERSATION_CLEARED, onCleared);
     return () => window.removeEventListener(CONVERSATION_CLEARED, onCleared);
-  }, [vault]);
+  }, [vault, open]);
 
-  // And kept as it goes, each time an answer finishes.
+  // And the open thread kept as it goes, each time an answer finishes.
   const finished = turns.filter((turn) => turn.answer.state !== "streaming" && !turn.edits?.aligning);
   const finishedKey = finished.map((turn) => `${turn.id}:${turn.answer.state}`).join(",");
   const latest = useRef(turns);
@@ -207,9 +261,12 @@ export function useAiChat(agent: string, access: NoteAccess) {
     latest.current = turns;
   }, [turns]);
   useEffect(() => {
-    if (!finishedKey) return;
-    saveConversation(vault, latest.current.filter((turn) => turn.answer.state !== "streaming").map(kept));
-  }, [finishedKey, vault]);
+    if (!finishedKey || finishedKey === opened.current) return;
+    const saved = latest.current.filter((turn) => turn.answer.state !== "streaming").map(kept);
+    setThreads(
+      keepThread(vault, { id: threadId, title: titleFor(saved), updatedAt: Date.now(), turns: saved })
+    );
+  }, [finishedKey, vault, threadId]);
 
   const update = useCallback((id: number, change: (turn: ChatTurn) => ChatTurn) => {
     setTurns((all) => all.map((turn) => (turn.id === id ? change(turn) : turn)));
@@ -255,7 +312,13 @@ export function useAiChat(agent: string, access: NoteAccess) {
    * Earlier answers' edits still waiting are replaced by these.
    */
   const place = useCallback(
-    (id: number, path: string, proposals: Proposal[], problem: string | null) => {
+    (
+      id: number,
+      path: string,
+      proposals: Proposal[],
+      problem: string | null,
+      selected: Selected | null = null
+    ) => {
       const view = notes.current.viewFor(path);
       if (!view) {
         const waiting = cardsFor(proposals, "pending");
@@ -263,7 +326,8 @@ export function useAiChat(agent: string, access: NoteAccess) {
         updateEdits(id, { cards: waiting, aligning: false, shown: false, problem });
         return;
       }
-      const { fresh, stale } = againstLiveNote(proposals, view.state.doc.toString());
+      const live = view.state.doc.toString();
+      const { fresh, stale } = againstLiveNote(proposals, live, scopeIn(live, selected));
       // Older edits still waiting give way to these.
       setTurns((all) =>
         all.map((turn) =>
@@ -301,19 +365,32 @@ export function useAiChat(agent: string, access: NoteAccess) {
 
   /** Reads a finished answer's edits, with the one retry for anchors that did not line up. */
   const settle = useCallback(
-    async (id: number, path: string, context: AiContext, answer: Answer, model: string | null) => {
+    async (
+      id: number,
+      path: string,
+      context: AiContext,
+      answer: Answer,
+      model: string | null,
+      selected: Selected | null
+    ) => {
       const text = answerText(answer);
       if (!hasEditsBlock(text)) return;
       update(id, (turn) => ({
         ...turn,
-        edits: { path, cards: [], aligning: false, shown: false, problem: null },
+        edits: { path, selected, cards: [], aligning: false, shown: false, problem: null },
       }));
-      const parsed = parseProposals(text, context.note);
+      // Asked for a change to the selection alone: its edits go inside it.
+      const scope = selected && context.selection ? context.selection : null;
+      const parsed = parseProposals(text, context.note, scope);
       if (parsed.ok) {
-        place(id, path, parsed.proposals, null);
+        place(id, path, parsed.proposals, null, selected);
         return;
       }
-      if (parsed.reason !== "anchor-missing" && parsed.reason !== "anchor-ambiguous") {
+      if (
+        parsed.reason !== "anchor-missing" &&
+        parsed.reason !== "anchor-ambiguous" &&
+        parsed.reason !== "outside-selection"
+      ) {
         updateEdits(id, { problem: PROBLEMS[parsed.reason] ?? null });
         return;
       }
@@ -321,15 +398,17 @@ export function useAiChat(agent: string, access: NoteAccess) {
       // One retry, never two, and not shown as a question of its own.
       updateEdits(id, { aligning: true });
       const failed = parsed.failed ?? [];
-      const retry = await prompt(retryRequest(failed), null, path, model, () => {});
+      const retry = await prompt(retryRequest(failed, !!scope), null, path, model, () => {});
       const { proposals, unplaced } =
         retry.state === "done"
-          ? afterRetry(parsed.resolved ?? [], failed.length, answerText(retry), context.note)
+          ? afterRetry(parsed.resolved ?? [], failed.length, answerText(retry), context.note, scope)
           : { proposals: parsed.resolved ?? [], unplaced: failed.length };
-      const problem = unplaced
-        ? `I couldn't line ${unplaced === 1 ? "one change" : `${unplaced} changes`} up with your note — try selecting a smaller section.`
-        : null;
-      if (proposals.length) place(id, path, proposals, problem);
+      const problem = !unplaced
+        ? null
+        : scope
+          ? OUTSIDE
+          : `I couldn't line ${unplaced === 1 ? "one change" : `${unplaced} changes`} up with your note — try selecting a smaller section.`;
+      if (proposals.length) place(id, path, proposals, problem, selected);
       else updateEdits(id, { aligning: false, problem });
     },
     [place, update, updateEdits]
@@ -349,6 +428,7 @@ export function useAiChat(agent: string, access: NoteAccess) {
       context,
       intent,
       model,
+      selected = null,
     }: AskInput) => {
       const id = ++nextId.current;
       // What was said before, for an agent that turns out not to have it.
@@ -406,7 +486,8 @@ export function useAiChat(agent: string, access: NoteAccess) {
         update(id, (turn) => ({ ...turn, answer: turn.answer.state === "failed" ? turn.answer : answer }));
         return;
       }
-      if (answer.state === "done" && context && path) await settle(id, path, context, answer, model);
+      if (answer.state === "done" && context && path)
+        await settle(id, path, context, answer, model, selected);
     },
     [agent, update, settle]
   );
@@ -424,7 +505,7 @@ export function useAiChat(agent: string, access: NoteAccess) {
         const from = live.indexOf(card.find);
         return [{ ...card, from, to: from + card.find.length }];
       });
-      place(turn.id, turn.edits.path, proposals, turn.edits.problem);
+      place(turn.id, turn.edits.path, proposals, turn.edits.problem, turn.edits.selected ?? null);
     },
     [place]
   );
@@ -434,13 +515,35 @@ export function useAiChat(agent: string, access: NoteAccess) {
   }, []);
 
   /** Starts over: a new conversation, with nothing carried across. */
+  /** Starts a new thread. The one open is kept, to come back to. */
   const newChat = useCallback(() => {
-    lastNote.current = null;
-    declined.current = [];
-    setTurns([]);
-    saveConversation(vault, []);
+    open(null);
     invoke("agent_new_chat").catch((error) => console.error("Couldn't start a new conversation:", error));
-  }, [vault]);
+  }, [open]);
 
-  return { turns, running, ask, show, stop, newChat };
+  /**
+   * Opens another thread. The agent starts a fresh session, and the thread's
+   * turns go with the next question - as they would after a restart.
+   */
+  const openThread = useCallback(
+    (id: string) => {
+      if (id === threadId) return;
+      const thread = loadThreads(vault).find((kept) => kept.id === id);
+      if (!thread) return;
+      open(thread);
+      invoke("agent_new_chat").catch((error) => console.error("Couldn't switch conversations:", error));
+    },
+    [open, threadId, vault]
+  );
+
+  /** Forgets a thread; forgetting the open one starts a new one. */
+  const deleteThread = useCallback(
+    (id: string) => {
+      setThreads(forgetThread(vault, id));
+      if (id === threadId) newChat();
+    },
+    [newChat, threadId, vault]
+  );
+
+  return { turns, running, ask, show, stop, newChat, threads, threadId, openThread, deleteThread };
 }

@@ -210,3 +210,54 @@ describe("after the one retry", () => {
     expect(afterRetry(lined(), 1, "Sorry, I can't.", note)).toMatchObject({ unplaced: 1 });
   });
 });
+
+describe("a change asked for the selection alone", () => {
+  // The word is in the note twice: in a paragraph, and on its own line,
+  // selected.
+  const note = "It cost me the charm I naturally had back then.\n\nnaturally\n";
+  const selected = {
+    from: note.lastIndexOf("naturally"),
+    to: note.lastIndexOf("naturally") + "naturally".length,
+  };
+  const block = (edits: unknown) => "Options.\n\n```nuza-edits\n" + JSON.stringify(edits) + "\n```";
+
+  test("the selected word is the one changed, however often it appears", () => {
+    const parsed = parseProposals(
+      block([{ find: "naturally", replace: "originally", why: "" }]),
+      note,
+      selected
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.proposals[0].from).toBe(selected.from);
+  });
+
+  test("an edit to the same word somewhere else is refused, and said to be", () => {
+    const parsed = parseProposals(
+      block([{ find: "the charm I naturally had", replace: "the charm I originally had", why: "" }]),
+      note,
+      selected
+    );
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.reason).toBe("outside-selection");
+      expect(parsed.failed).toEqual([1]);
+    }
+  });
+
+  test("without a selection to stay in, an anchor must still be unique", () => {
+    const parsed = parseProposals(block([{ find: "naturally", replace: "originally", why: "" }]), note);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.reason).toBe("anchor-ambiguous");
+  });
+
+  test("in the note as it is now, it is found in the selection too", () => {
+    const proposal = { id: "e", from: 0, to: 9, find: "naturally", replace: "originally", why: "" };
+    const { fresh, stale } = againstLiveNote([proposal], note, selected);
+    expect(stale).toEqual([]);
+    expect(fresh[0].from).toBe(selected.from);
+  });
+
+  test("the retry says to stay inside the selection", () => {
+    expect(retryRequest([1], true)).toContain("from inside the selection marks");
+  });
+});

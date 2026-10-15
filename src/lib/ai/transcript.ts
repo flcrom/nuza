@@ -90,7 +90,8 @@ const TOOL_STEPS: Record<string, string> = {
 
 /** A step's title in words: a call to one of nuza's tools reads as what it did. */
 export function stepTitle(title: string): string {
-  const tool = /^mcp(?:__|\.)nuza(?:__|\.)(\w+)$/.exec(title.trim())?.[1];
+  // `mcp__nuza__search_vault` from Claude Code, `nuza_search_vault` from OpenCode.
+  const tool = /^(?:mcp(?:__|\.))?nuza(?:__|\.|_)(\w+)$/.exec(title.trim())?.[1];
   return (tool && TOOL_STEPS[tool]) || title;
 }
 

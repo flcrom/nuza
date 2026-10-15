@@ -190,25 +190,37 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
             <Plus size={14} />
           </button>
           {models.length > 0 && (
-            <label className="relative flex min-w-0 items-center gap-0.5 text-xs text-gray-500 hover:text-gray-300">
+            // The name and its arrow as text, with the real menu laid over
+            // them unseen: a menu is as wide as its longest model, and its
+            // arrow would sit far from the name.
+            <label className="relative flex min-w-0 cursor-pointer items-center gap-0.5 text-xs text-gray-500 hover:text-gray-300">
+              <span className="truncate">
+                {models.find((offered) => offered.id === model)?.name ?? "Default model"}
+              </span>
+              <ChevronUp size={12} className="shrink-0" aria-hidden />
               <select
                 value={model ?? ""}
                 onChange={(event) => onModel(event.target.value || null)}
                 aria-label="Model"
-                className="min-w-0 max-w-40 cursor-pointer appearance-none truncate bg-transparent pr-3.5 outline-none"
+                className="absolute inset-0 cursor-pointer opacity-0"
               >
-                <option value="">Default model</option>
                 {models.map((offered) => (
                   <option key={offered.id} value={offered.id}>
                     {offered.name}
                   </option>
                 ))}
               </select>
-              <ChevronUp size={12} className="pointer-events-none absolute right-0" aria-hidden />
             </label>
           )}
           <span className="flex-1" />
-          {used !== null && <span className="text-[11px] text-gray-600">{used}% context</span>}
+          {used !== null && (
+            <span
+              className="cursor-default text-[11px] text-gray-600"
+              title={`This conversation fills ${used}% of what the agent can keep in mind at once - your notes, the questions and its answers. Near 100% it starts losing the earliest parts; a new chat starts it fresh.`}
+            >
+              {used}% context
+            </span>
+          )}
           <button
             type="button"
             onClick={running ? onStop : () => onSend(value)}

@@ -87,3 +87,104 @@ export function saveConversation(vault: string | null, turns: SavedTurn[]) {
     console.error("Couldn't keep the AI conversation:", error);
   }
 }
+
+/** A thread of conversation, kept for the vault it was had in. */
+export interface Thread {
+  id: string;
+  /** What the first message said, for the list of threads. */
+  title: string;
+  /** When it was last added to, in milliseconds. */
+  updatedAt: number;
+  turns: SavedTurn[];
+}
+
+/** How long a thread is kept without being added to. */
+export const THREAD_DAYS = 7;
+/** At most this many threads per vault; the oldest go first. */
+export const MAX_THREADS = 50;
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Where a vault's threads are kept. */
+export function threadsKey(vault: string | null): string {
+  return `nuza:ai-threads:${vault ?? NO_VAULT}`;
+}
+
+/** A new thread's id: when it began, and enough else that two never meet. */
+export function newThreadId(now = Date.now()): string {
+  return `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** What a thread is called in the list: its first message, or the action it was. */
+export function titleFor(turns: SavedTurn[]): string {
+  const first = turns[0];
+  if (!first) return "New chat";
+  const said = first.text.trim().replace(/\s+/g, " ");
+  const title = first.action ? (said ? `${first.action}: ${said}` : first.action) : said || first.request;
+  const about = first.about?.title;
+  const named = about && !said ? `${title} · ${about}` : title;
+  return named.length > 60 ? `${named.slice(0, 59)}…` : named;
+}
+
+function isThread(value: unknown): value is Thread {
+  const thread = value as Thread;
+  return (
+    !!thread &&
+    typeof thread.id === "string" &&
+    typeof thread.updatedAt === "number" &&
+    Array.isArray(thread.turns)
+  );
+}
+
+/**
+ * A vault's threads, newest first, less any not added to for a week. The one
+ * conversation kept before there were threads comes along as the first.
+ */
+export function loadThreads(vault: string | null, now = Date.now()): Thread[] {
+  let threads: Thread[];
+  try {
+    const kept = localStorage.getItem(threadsKey(vault));
+    const parsed: unknown = kept ? JSON.parse(kept) : [];
+    threads = Array.isArray(parsed) ? parsed.filter(isThread) : [];
+  } catch {
+    threads = [];
+  }
+  const earlier = loadConversation(vault);
+  if (earlier.length) {
+    threads.push({ id: newThreadId(now), title: titleFor(earlier), updatedAt: now, turns: earlier });
+    saveConversation(vault, []);
+  }
+  const fresh = threads
+    .filter((thread) => now - thread.updatedAt < THREAD_DAYS * DAY)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  if (fresh.length !== threads.length || earlier.length) saveThreads(vault, fresh);
+  return fresh;
+}
+
+export function saveThreads(vault: string | null, threads: Thread[]) {
+  try {
+    const key = threadsKey(vault);
+    const kept = threads
+      .filter((thread) => thread.turns.length)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, MAX_THREADS)
+      .map((thread) => ({ ...thread, turns: thread.turns.slice(-KEPT_TURNS) }));
+    if (kept.length) localStorage.setItem(key, JSON.stringify(kept));
+    else localStorage.removeItem(key);
+  } catch (error) {
+    console.error("Couldn't keep the AI threads:", error);
+  }
+}
+
+/** `thread` kept as it is now, in place of what was kept for it before. */
+export function keepThread(vault: string | null, thread: Thread, now = Date.now()): Thread[] {
+  const others = loadThreads(vault, now).filter((kept) => kept.id !== thread.id);
+  const threads = thread.turns.length ? [thread, ...others] : others;
+  saveThreads(vault, threads);
+  return threads;
+}
+
+export function forgetThread(vault: string | null, id: string, now = Date.now()): Thread[] {
+  const threads = loadThreads(vault, now).filter((kept) => kept.id !== id);
+  saveThreads(vault, threads);
+  return threads;
+}

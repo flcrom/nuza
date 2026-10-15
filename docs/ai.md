@@ -5,7 +5,9 @@ panel (⌘L, Ctrl+L elsewhere) hands your question to an AI agent that is
 already on your computer, on your own plan. nuza runs no model, holds no key
 and has no server.
 
-Nothing runs until you turn an agent on in **Settings → AI** and agree to a
+AI is optional, and **off until you turn it on** in **Settings → AI**. Until
+then there is no panel, ⌘L does nothing, and nuza never looks for or starts an
+agent. Once it is on, nothing runs until you pick an agent and agree to a
 one-time notice saying what it will be sent.
 
 ## The agents
@@ -26,7 +28,8 @@ few minutes; after that it starts in seconds.
 To get going:
 
 1. Install one of the agents above and sign in to it.
-2. In nuza, open **Settings → AI** and press **Use** next to it.
+2. In nuza, open **Settings → AI**, turn **AI** on, and press **Use** next to
+   the agent.
 3. Agree to the notice, open a note, and press ⌘L.
 
 ## What it is sent
@@ -44,7 +47,9 @@ Only when you ask something, and only to the agent you turned on:
   pick up where you left off.
 - With **Let the agent search this vault** on: the notes it looks up, through
   nuza's read-only search. It can search, list and read notes. It cannot write
-  them, and it cannot see anything outside the vault.
+  them, and it cannot see anything outside the vault. It is told to leave your
+  other notes alone unless you ask it to use them ("rephrase this in the style
+  of my other posts") or the question can't be answered without them.
 
 The agent passes all of this to its own provider, on your account, under that
 provider's terms. nuza keeps the conversation and your memory on this computer
@@ -95,5 +100,6 @@ Two, stated plainly:
 
 ## Turning it off
 
-Settings → AI → **Turn off**. The agent is stopped: no process, no open port,
-no listener. Your notes are untouched either way.
+Turn **AI** off in Settings → AI (or Quick Settings), or press **Turn off**
+next to the agent. The agent is stopped: no process, no open port, no
+listener. Your notes are untouched either way.

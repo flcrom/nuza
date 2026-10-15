@@ -17,7 +17,7 @@ import {
   type Preset,
   type Readiness,
 } from "@/lib/ai/agents";
-import { chooseModel, modelFor, type ModelChoices } from "@/lib/ai/modelChoice";
+import { cheapestModel, chooseModel, modelFor, type ModelChoices } from "@/lib/ai/modelChoice";
 import {
   CONVERSATION_CLEARED,
   MEMORY_ITEM_LENGTH,
@@ -25,6 +25,8 @@ import {
   memoryFor,
   remember,
   saveConversation,
+  saveThreads,
+  THREAD_DAYS,
   type MemoryStore,
 } from "@/lib/ai/memory";
 import { INSTRUCTIONS_LIMIT } from "@/lib/ai/prompt";
@@ -129,18 +131,19 @@ function Replies({
       </div>
 
       <SettingRow
-        title="Conversation"
-        description="Kept on this computer, so the AI can pick up where you left off after a restart."
+        title="Chats"
+        description={`Kept on this computer, so you can go back to one from the panel. Chats untouched for ${THREAD_DAYS} days are deleted.`}
       >
         <button
           type="button"
           className={BUTTON}
           onClick={() => {
             saveConversation(vaultPath, []);
+            saveThreads(vaultPath, []);
             window.dispatchEvent(new CustomEvent(CONVERSATION_CLEARED, { detail: vaultPath }));
           }}
         >
-          Clear
+          Delete all
         </button>
       </SettingRow>
     </section>
@@ -363,10 +366,33 @@ function CustomAgent({ current, busy, onUse }: CustomAgentProps) {
 }
 
 /**
- * The AI pane: which agent nuza talks to, what it is sent, and a place to
- * try it. Opening this pane is what lets nuza look for agents at all.
+ * The AI pane. AI is off until the writer turns it on here: before that this
+ * pane is the switch and a line on what it does, and nothing else - nothing
+ * looks for an agent, and nothing is started.
  */
 export default function AiSettings({
+  enabled,
+  setEnabled,
+  ...settings
+}: AiSettingsProps & { enabled: boolean; setEnabled: (enabled: boolean) => void }) {
+  return (
+    <div className="space-y-6">
+      <SettingRow
+        title="AI"
+        description="An optional panel (⌘L) that asks an AI agent already on your computer about your notes, on your own plan. Off, nuza never looks for or starts one."
+      >
+        <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="AI" />
+      </SettingRow>
+      {enabled && <AgentSettings {...settings} />}
+    </div>
+  );
+}
+
+/**
+ * Which agent nuza talks to, what it is sent, and a place to try it. Shown
+ * only with AI on: showing it is what lets nuza look for agents at all.
+ */
+function AgentSettings({
   vaultPath,
   sendWholeNote,
   setSendWholeNote,
@@ -413,6 +439,7 @@ export default function AiSettings({
   }, [agent, listModels]);
 
   const chosenModel = modelFor(modelChoices, agent, vaultPath);
+  const cheapest = cheapestModel(models ?? []);
   const sandboxLine = useMemo(() => {
     if (!state) return null;
     return state.sandboxed
@@ -509,7 +536,7 @@ export default function AiSettings({
         {agent && models && models.length > 0 && (
           <SettingRow
             title="Model"
-            description={`The model ${state?.label ?? "the agent"} answers with in this folder.`}
+            description={`The model ${state?.label ?? "the agent"} answers with in this folder. Unless you pick one, nuza uses the cheapest it offers.`}
           >
             <select
               className="max-w-44 cursor-pointer rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-white outline-none focus:border-[var(--nuza-accent)]"
@@ -518,7 +545,10 @@ export default function AiSettings({
                 setModelChoices(chooseModel(modelChoices, agent, vaultPath, event.target.value || null))
               }
             >
-              <option value="">Its own default</option>
+              <option value="">
+                Cheapest
+                {cheapest ? ` (${models.find((model) => model.id === cheapest)?.name ?? cheapest})` : ""}
+              </option>
               {models.map((model) => (
                 <option key={model.id} value={model.id} title={model.description}>
                   {model.name}
