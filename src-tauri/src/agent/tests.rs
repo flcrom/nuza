@@ -1172,6 +1172,13 @@ async fn real_opencode_streams_through_the_harness() {
     }
     println!("OUTCOME: {outcome:?}");
     assert!(outcome.is_ok());
+    // An answer, not just a turn that ended: an agent that cannot reach its
+    // model ends its turn too, saying nothing.
+    assert!(
+        panel.said().to_lowercase().contains("hello"),
+        "it said: {:?}",
+        panel.said()
+    );
     harness.shutdown().await;
 }
 
@@ -1192,6 +1199,11 @@ async fn real_codex_streams_through_the_harness() {
         .await;
     println!("OUTCOME: {outcome:?} SAID: {}", panel.said());
     assert!(outcome.is_ok());
+    assert!(
+        panel.said().to_lowercase().contains("hello"),
+        "it said: {:?}",
+        panel.said()
+    );
     harness.shutdown().await;
 }
 
@@ -1702,6 +1714,7 @@ mod drill {
     /// forbids - to read a file outside the vault, and to write files. A real
     /// agent that tries is stopped by the fence or the permission layer, and
     /// the drill's checks hold.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     async fn fenced(config: AgentConfig) {
         let canary = plant("reading-list.txt", false);
         let vault = tempfile::tempdir().unwrap();
@@ -1754,12 +1767,17 @@ mod drill {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
     #[ignore = "runs real Claude Code; costs a turn on the person's own plan"]
     async fn real_claude_is_fenced_in() {
         fenced(AgentConfig::ClaudeCode).await;
     }
 
+    // Only where there is a fence: on Windows the agent runs with the
+    // person's own permissions, as the notice says, and this would only
+    // prove that again.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[tokio::test]
     #[ignore = "runs real OpenCode; costs a turn on the person's own plan"]
     async fn real_opencode_is_fenced_in() {

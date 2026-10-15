@@ -14,7 +14,7 @@ one-time notice saying what it will be sent.
 | ------------------ | --------------------------------------------------------------------------------- | ------------------------------------------- |
 | **Claude Code**    | `npm install -g @anthropic-ai/claude-code` (needs Node.js 22 or newer)            | Run `claude` once in a terminal and sign in |
 | **Codex**          | `npm install -g @openai/codex` (needs Node.js 22 or newer)                        | Run `codex login`                           |
-| **OpenCode**       | `curl -fsSL https://opencode.ai/install \| bash`                                  | Run `opencode auth login`                   |
+| **OpenCode**       | `curl -fsSL https://opencode.ai/install \| bash`, or `npm install -g opencode-ai` | Run `opencode auth login`                   |
 | **Something else** | Any program that speaks the Agent Client Protocol (ACP) over its input and output | However that program does it                |
 
 For Claude Code and Codex, nuza starts a small adapter that lets them speak ACP,
