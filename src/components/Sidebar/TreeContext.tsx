@@ -96,5 +96,7 @@ export function createTreeMarks(marks: TreeMarks): TreeMarkStore {
  */
 export function useTreeMark<T>(read: (marks: TreeMarks) => T): T {
   const { marks } = useTreeContext();
-  return useSyncExternalStore(marks.subscribe, () => read(marks.get()));
+  const answer = () => read(marks.get());
+  // The same answer for a render to markup, where there is nothing to subscribe to.
+  return useSyncExternalStore(marks.subscribe, answer, answer);
 }
