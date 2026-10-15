@@ -37,7 +37,14 @@ export interface ProposedEdit {
 }
 
 export type ParseFailure =
-  "no-block" | "malformed" | "too-many" | "too-long" | "anchor-missing" | "anchor-ambiguous" | "overlap";
+  | "no-block"
+  | "malformed"
+  | "too-many"
+  | "too-long"
+  | "anchor-missing"
+  | "anchor-ambiguous"
+  | "outside-selection"
+  | "overlap";
 
 export type ParseResult =
   | { ok: true; proposals: Proposal[] }
@@ -125,32 +132,56 @@ export function editsIn(
   return { ok: true, edits };
 }
 
-/** Where `find` is in `note`: once, nowhere, or more than once. */
-function locate(note: string, find: string): number | "missing" | "ambiguous" {
-  const first = note.indexOf(find);
-  if (first === -1) return "missing";
-  return note.indexOf(find, first + 1) === -1 ? first : "ambiguous";
+/** A range of the note a change was asked for - what the writer selected. */
+export interface Scope {
+  from: number;
+  to: number;
+}
+
+/**
+ * Where `find` is in `note`: once, nowhere, or more than once. With a
+ * `scope`, only where it touches the scope counts - so the selected word is
+ * the one changed, however often it appears elsewhere - and text found only
+ * outside it is said to be.
+ */
+function locate(
+  note: string,
+  find: string,
+  scope?: Scope | null
+): number | "missing" | "ambiguous" | "outside" {
+  const all: number[] = [];
+  for (let at = note.indexOf(find); at !== -1; at = note.indexOf(find, at + 1)) all.push(at);
+  if (!all.length) return "missing";
+  if (!scope) return all.length === 1 ? all[0] : "ambiguous";
+  const inside = all.filter((at) => at < scope.to && at + find.length > scope.from);
+  if (!inside.length) return "outside";
+  return inside.length === 1 ? inside[0] : "ambiguous";
 }
 
 let nextId = 0;
 
-/** Finds each edit in `note`, and checks the set does not overlap. */
-export function resolveEdits(edits: ProposedEdit[], note: string): ParseResult {
+/**
+ * Finds each edit in `note`, and checks the set does not overlap. With a
+ * `scope`, every edit must be inside it.
+ */
+export function resolveEdits(edits: ProposedEdit[], note: string, scope?: Scope | null): ParseResult {
   const resolved: Proposal[] = [];
   const missing: number[] = [];
   const ambiguous: number[] = [];
+  const outside: number[] = [];
   edits.forEach((edit, index) => {
-    const at = locate(note, edit.find);
+    const at = locate(note, edit.find, scope);
     if (at === "missing") missing.push(index + 1);
     else if (at === "ambiguous") ambiguous.push(index + 1);
+    else if (at === "outside") outside.push(index + 1);
     else resolved.push({ id: `edit-${++nextId}`, from: at, to: at + edit.find.length, ...edit });
   });
 
-  if (missing.length || ambiguous.length) {
+  if (missing.length || ambiguous.length || outside.length) {
     return {
       ok: false,
-      reason: missing.length ? "anchor-missing" : "anchor-ambiguous",
-      failed: [...missing, ...ambiguous].sort((a, b) => a - b),
+      reason: outside.length ? "outside-selection" : missing.length ? "anchor-missing" : "anchor-ambiguous",
+      failed: [...missing, ...ambiguous, ...outside].sort((a, b) => a - b),
       resolved,
     };
   }
@@ -163,9 +194,9 @@ export function resolveEdits(edits: ProposedEdit[], note: string): ParseResult {
 }
 
 /** The edits an answer proposes, found in `note` - the note as it was sent. */
-export function parseProposals(answer: string, note: string): ParseResult {
+export function parseProposals(answer: string, note: string, scope?: Scope | null): ParseResult {
   const read = editsIn(answer);
-  return read.ok ? resolveEdits(read.edits, note) : read;
+  return read.ok ? resolveEdits(read.edits, note, scope) : read;
 }
 
 /**
@@ -175,12 +206,13 @@ export function parseProposals(answer: string, note: string): ParseResult {
  */
 export function againstLiveNote(
   proposals: Proposal[],
-  live: string
+  live: string,
+  scope?: Scope | null
 ): { fresh: Proposal[]; stale: Proposal[] } {
   const fresh: Proposal[] = [];
   const stale: Proposal[] = [];
   for (const proposal of proposals) {
-    const at = locate(live, proposal.find);
+    const at = locate(live, proposal.find, scope);
     if (typeof at === "number") fresh.push({ ...proposal, from: at, to: at + proposal.find.length });
     else stale.push(proposal);
   }
@@ -191,11 +223,17 @@ export function againstLiveNote(
  * The one follow-up sent when some anchors did not line up: which edits,
  * and what to do about them.
  */
-export function retryRequest(failed: number[]): string {
+export function retryRequest(failed: number[], scoped = false): string {
   const which =
     failed.length === 1
       ? `Edit ${failed[0]}`
       : `Edits ${failed.slice(0, -1).join(", ")} and ${failed[failed.length - 1]}`;
+  if (scoped)
+    return (
+      `${which} could not be applied: the writer asked for a change to the selected text only, and every \`find\` ` +
+      `must be copied character-for-character from inside the selection marks. Re-send only the edits that failed, ` +
+      `in a new \`${EDITS_FENCE}\` block, changing nothing outside the selection. Say nothing else.`
+    );
   return (
     `${which} could not be applied: the text you asked to find does not appear in the note exactly once. ` +
     `Re-send only the edits that failed, in a new \`${EDITS_FENCE}\` block, with longer \`find\` anchors ` +
@@ -212,12 +250,13 @@ export function afterRetry(
   lined: Proposal[],
   failedCount: number,
   retryAnswer: string,
-  note: string
+  note: string,
+  scope?: Scope | null
 ): { proposals: Proposal[]; unplaced: number } {
   const read = editsIn(retryAnswer);
   let fixed: Proposal[] = [];
   if (read.ok) {
-    const resolved = resolveEdits(read.edits, note);
+    const resolved = resolveEdits(read.edits, note, scope);
     fixed = resolved.ok ? resolved.proposals : (resolved.resolved ?? []);
   }
   const kept: Proposal[] = [];

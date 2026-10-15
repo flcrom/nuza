@@ -65,6 +65,8 @@ interface SettingsModalProps {
   vaultPath: string | null;
   aiSendWholeNote: boolean;
   setAiSendWholeNote: (enabled: boolean) => void;
+  aiEnabled: boolean;
+  setAiEnabled: (enabled: boolean) => void;
   aiModelChoices: ModelChoices;
   setAiModelChoices: (choices: ModelChoices) => void;
   aiInstructions: string;
@@ -114,6 +116,8 @@ export default function SettingsModal({
   vaultPath,
   aiSendWholeNote,
   setAiSendWholeNote,
+  aiEnabled,
+  setAiEnabled,
   aiModelChoices,
   setAiModelChoices,
   aiInstructions,
@@ -232,6 +236,8 @@ export default function SettingsModal({
 
             {activeSection === "ai" && (
               <AiSettings
+                enabled={aiEnabled}
+                setEnabled={setAiEnabled}
                 vaultPath={vaultPath}
                 sendWholeNote={aiSendWholeNote}
                 setSendWholeNote={setAiSendWholeNote}

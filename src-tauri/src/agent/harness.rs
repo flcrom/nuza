@@ -114,7 +114,7 @@ impl Drop for ToolGrant {
 }
 
 /// Said to the agent, in a new conversation that has nuza's vault tools.
-pub(crate) const TOOLS_PARAGRAPH: &str = "You have tools from a server named `nuza` that read the writer's notes: `search_vault` finds passages across them, `read_note` reads one in full or from a heading, `outline` shows a note's headings, `backlinks` shows what links to it, and `list_notes`, `list_tags` and `notes_with_tag` show what there is. They only read. Use them when the text here is not enough. Cite a note you used as a Markdown link with a `nuza:` address, `[title](nuza:<path>)`, or `nuza:<path>#<paragraph>` when you know its ¶ number, using only paths the tools gave you.";
+pub(crate) const TOOLS_PARAGRAPH: &str = "You have tools from a server named `nuza` that read the writer's notes: `search_vault` finds passages across them, `read_note` reads one in full or from a heading, `outline` shows a note's headings, `backlinks` shows what links to it, and `list_notes`, `list_tags` and `notes_with_tag` show what there is. They only read. Most questions are about the note you were sent, and need nothing else: use the tools only when the writer asks you to look at other notes (\"use my other notes as reference\", \"how does this fit with the rest\"), or when the question cannot be answered without them. Cite a note you used as a Markdown link with a `nuza:` address, `[title](nuza:<path>)`, or `nuza:<path>#<paragraph>` when you know its ¶ number, using only paths the tools gave you.";
 
 /// A model the person's plan offers, for the picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

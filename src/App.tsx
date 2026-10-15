@@ -131,6 +131,8 @@ function App() {
   const [aiModelChoices, setAiModelChoices] = usePersistedState<ModelChoices>("aiModel", NO_MODEL_CHOICES);
   // How the writer likes replies, and what the AI should keep in mind per
   // vault: both theirs, both kept on this computer.
+  // AI is optional, and off until the writer turns it on in Settings.
+  const [aiEnabled, setAiEnabledState] = usePersistedState("aiEnabled", false);
   const [aiInstructions, setAiInstructions] = usePersistedState("aiInstructions", "");
   const [aiMemory, setAiMemory] = usePersistedState<MemoryStore>("aiMemory", NO_MEMORY);
 
@@ -568,6 +570,7 @@ function App() {
    */
   const toggleAiPanel = useCallback(
     (intent: "ask" | "edit") => {
+      if (!aiEnabled) return;
       if (isAiOpen && !zen && intent === "ask") {
         setIsAiOpen(false);
         returnFocusToEditor();
@@ -579,13 +582,27 @@ function App() {
       setIsAiOpen(true);
       aiPanelRef.current?.focusComposer(intent);
     },
-    [isAiOpen, zen, sideView, returnFocusToEditor]
+    [aiEnabled, isAiOpen, zen, sideView, returnFocusToEditor]
   );
 
   const closeAiPanel = useCallback(() => {
     setIsAiOpen(false);
     returnFocusToEditor();
   }, [returnFocusToEditor]);
+
+  /**
+   * Turns AI on or off. Off closes the panel and stops whatever agent was
+   * running - no process, no port - until it is turned on again.
+   */
+  const setAiEnabled = useCallback(
+    (enabled: boolean) => {
+      setAiEnabledState(enabled);
+      if (enabled) return;
+      setIsAiOpen(false);
+      invoke("agent_turn_off").catch((error) => console.error("Couldn't stop the agent:", error));
+    },
+    [setAiEnabledState]
+  );
 
   /** The editor showing the note at `path`, if one is: where the AI panel's edits go. */
   const aiViewFor = useCallback(
@@ -670,19 +687,30 @@ function App() {
         onToggle: setAutoUpdateEnabled,
       },
       {
-        id: "ai-panel",
-        title: "AI Panel",
-        description: "The panel for asking your own agent about the note",
-        enabled: isAiOpen,
-        onToggle: (on) => (on ? toggleAiPanel("ask") : closeAiPanel()),
+        id: "ai",
+        title: "AI",
+        description: "Ask an agent already on your computer about your notes",
+        enabled: aiEnabled,
+        onToggle: setAiEnabled,
       },
-      {
-        id: "ai-whole-note",
-        title: "Send the Whole Note to AI",
-        description: "Off sends only the text you select",
-        enabled: aiSendWholeNote,
-        onToggle: setAiSendWholeNote,
-      },
+      ...(aiEnabled
+        ? [
+            {
+              id: "ai-panel",
+              title: "AI Panel",
+              description: "The panel for asking your own agent about the note",
+              enabled: isAiOpen,
+              onToggle: (on: boolean) => (on ? toggleAiPanel("ask") : closeAiPanel()),
+            },
+            {
+              id: "ai-whole-note",
+              title: "Send the Whole Note to AI",
+              description: "Off sends only the text you select",
+              enabled: aiSendWholeNote,
+              onToggle: setAiSendWholeNote,
+            },
+          ]
+        : []),
     ],
     [
       vimEnabled,
@@ -700,6 +728,8 @@ function App() {
       setCompactMode,
       autoUpdateEnabled,
       setAutoUpdateEnabled,
+      aiEnabled,
+      setAiEnabled,
       isAiOpen,
       toggleAiPanel,
       closeAiPanel,
@@ -934,41 +964,43 @@ function App() {
 
       <div className="flex-1 min-h-0 px-4 flex w-full relative z-20 print:block print:p-0">
         {/*
-          The AI panel, docked opposite the sidebar. Mounted from the start and
-          kept that way, so it slides rather than pops and keeps its
-          conversation while closed; at no width and `inert` until mod+L, so
-          a writer who never asks for it never meets it.
+          The AI panel, docked opposite the sidebar - only with AI turned on in
+          Settings; until then it is not there at all. Mounted from then on
+          and kept that way, so it slides rather than pops and keeps its
+          conversation while closed; at no width and `inert` until mod+L.
         */}
-        <div
-          className={`h-full shrink-0 overflow-hidden print:hidden ${isResizingAiPanel ? "" : "sidebar-transition"}`}
-          style={{ width: isAiOpen && !zen ? aiPanelWidth + SIDEBAR_GAP : 0 }}
-          inert={!isAiOpen || zen}
-        >
-          <div className="h-full" style={{ width: aiPanelWidth + SIDEBAR_GAP, paddingRight: SIDEBAR_GAP }}>
-            <AiPanel
-              ref={aiPanelRef}
-              isOpen={isAiOpen && !zen}
-              width={aiPanelWidth}
-              isResizing={isResizingAiPanel}
-              onResizeStart={startAiPanelResize}
-              onResizeReset={resetAiPanelWidth}
-              readNote={readAiNote}
-              viewFor={aiViewFor}
-              openNote={openForAi}
-              openAt={openAiCitation}
-              instructions={aiInstructions}
-              memory={memoryFor(aiMemory, rootPath)}
-              onRemember={(item) => setAiMemory((store) => remember(store, rootPath, item))}
-              sendWholeNote={aiSendWholeNote}
-              vaultPath={rootPath}
-              modelChoices={aiModelChoices}
-              setModelChoices={setAiModelChoices}
-              onClose={closeAiPanel}
-              onReturnFocus={returnFocusToEditor}
-              onOpenSettings={openAiSettings}
-            />
+        {aiEnabled && (
+          <div
+            className={`h-full shrink-0 overflow-hidden print:hidden ${isResizingAiPanel ? "" : "sidebar-transition"}`}
+            style={{ width: isAiOpen && !zen ? aiPanelWidth + SIDEBAR_GAP : 0 }}
+            inert={!isAiOpen || zen}
+          >
+            <div className="h-full" style={{ width: aiPanelWidth + SIDEBAR_GAP, paddingRight: SIDEBAR_GAP }}>
+              <AiPanel
+                ref={aiPanelRef}
+                isOpen={isAiOpen && !zen}
+                width={aiPanelWidth}
+                isResizing={isResizingAiPanel}
+                onResizeStart={startAiPanelResize}
+                onResizeReset={resetAiPanelWidth}
+                readNote={readAiNote}
+                viewFor={aiViewFor}
+                openNote={openForAi}
+                openAt={openAiCitation}
+                instructions={aiInstructions}
+                memory={memoryFor(aiMemory, rootPath)}
+                onRemember={(item) => setAiMemory((store) => remember(store, rootPath, item))}
+                sendWholeNote={aiSendWholeNote}
+                vaultPath={rootPath}
+                modelChoices={aiModelChoices}
+                setModelChoices={setAiModelChoices}
+                onClose={closeAiPanel}
+                onReturnFocus={returnFocusToEditor}
+                onOpenSettings={openAiSettings}
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* The editor sits a shade below the surrounding chrome so the writing
             surface reads as the deepest layer, with the sidebar and the bars
@@ -1207,6 +1239,8 @@ function App() {
         vaultPath={rootPath}
         aiSendWholeNote={aiSendWholeNote}
         setAiSendWholeNote={setAiSendWholeNote}
+        aiEnabled={aiEnabled}
+        setAiEnabled={setAiEnabled}
         aiModelChoices={aiModelChoices}
         setAiModelChoices={setAiModelChoices}
         aiInstructions={aiInstructions}

@@ -51,6 +51,9 @@ describe("a citation in an answer", () => {
 describe("a step the agent takes", () => {
   test("a call to nuza's tools reads as what it did", () => {
     expect(stepTitle("mcp__nuza__search_vault")).toBe("Searched the vault");
+    // OpenCode names them its own way.
+    expect(stepTitle("nuza_search_vault")).toBe("Searched the vault");
+    expect(stepTitle("nuza_read_note")).toBe(stepTitle("mcp__nuza__read_note"));
     expect(stepTitle("mcp.nuza.read_note")).toBe("Read a note");
     expect(stepTitle("Read releases.md")).toBe("Read releases.md");
     expect(stepTitle("mcp__nuza__write_note")).toBe("mcp__nuza__write_note");

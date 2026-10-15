@@ -1,10 +1,20 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { BookOpen, PenLine, Replace, RotateCcw, ScanText, SpellCheck, Sparkles, X } from "lucide-react";
+import {
+  BookOpen,
+  History,
+  PenLine,
+  Replace,
+  SquarePen,
+  ScanText,
+  SpellCheck,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { cn } from "cn";
 import { useAgent } from "@/hooks/useAgent";
-import { useAiChat, type ChatTurn } from "@/hooks/useAiChat";
+import { useAiChat, type ChatTurn, type Selected } from "@/hooks/useAiChat";
 import { buildContext, selectionLines, type AiContext } from "@/lib/ai/context";
-import { chooseModel, modelFor, type ModelChoices } from "@/lib/ai/modelChoice";
+import { chooseModel, modelToUse, type ModelChoices } from "@/lib/ai/modelChoice";
 import type { Intent } from "@/lib/ai/prompt";
 import type { ModelInfo } from "@/lib/ai/protocol";
 import { contextUsed } from "@/lib/ai/transcript";
@@ -25,6 +35,7 @@ import { CitationContext, type Citations } from "./citations";
 import { invoke } from "@tauri-apps/api/core";
 import { report } from "@/lib/notices";
 import TurnView from "./TurnView";
+import ThreadList from "./ThreadList";
 import Composer, { type ComposerHandle } from "./Composer";
 import {
   ACTIONS,
@@ -148,6 +159,7 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
   const [prepared, setPrepared] = useState<Prepared>({ ok: true, context: null });
   const [models, setModels] = useState<ModelInfo[]>([]);
   const composer = useRef<ComposerHandle>(null);
+  const [showThreads, setShowThreads] = useState(false);
   /** What there is to act on: a selection, or at least a word at the caret. */
   const [selection, setSelection] = useState({ selected: false, onWord: false });
   /** A line from the panel itself, that goes again after a moment. */
@@ -213,11 +225,17 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
     if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) box.scrollTop = box.scrollHeight;
   }, [lastTurn]);
 
-  const model = modelFor(modelChoices, config, vaultPath);
+  const model = modelToUse(modelChoices, config, vaultPath, models);
 
   /** Asks the agent `question`, about the note as it is now - or as `note` says it is. */
   const ask = useCallback(
-    (question: string, shown: { text: string; action: string | null }, as: Intent, note = readNote()) => {
+    (
+      question: string,
+      shown: { text: string; action: string | null },
+      as: Intent,
+      note = readNote(),
+      selected: Selected | null = null
+    ) => {
       if (chat.running || !config) return;
       const now = prepare(note, sendWholeNote);
       setPrepared(now);
@@ -240,6 +258,7 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
         context,
         intent: as,
         model,
+        selected,
       });
     },
     [chat, config, readNote, sendWholeNote, model, instructions, memory]
@@ -271,7 +290,23 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
         setFlash(action.needs === "word" ? "Put the caret on a word first." : "Select some text first.");
         return;
       }
-      ask(requestFor(action, selected, rest), { text: rest, action: action.label }, action.intent, note);
+      // A change to what is selected stays inside it, however often the same
+      // words appear elsewhere in the note.
+      const scoped =
+        note && selected && action.intent === "edit"
+          ? {
+              from: note.selection.from,
+              to: note.selection.to,
+              text: note.text.slice(note.selection.from, note.selection.to),
+            }
+          : null;
+      ask(
+        requestFor(action, selected, rest),
+        { text: rest, action: action.label },
+        action.intent,
+        note,
+        scoped
+      );
     },
     [ask, onRemember, readNote]
   );
@@ -432,20 +467,36 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
         style={{ width }}
       >
         <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-zinc-800/80 px-3">
-          <h2 className="truncate text-xs font-medium text-gray-300">
-            Ask AI{config && <span className="text-gray-500"> · {label}</span>}
-          </h2>
+          <h2 className="truncate text-xs font-medium text-gray-300">{config ? label : "AI"}</h2>
           <div className="flex items-center gap-1">
+            {config && (
+              <button
+                type="button"
+                onClick={() => setShowThreads((shown) => !shown)}
+                title="Chats"
+                aria-label="Chats"
+                aria-expanded={showThreads}
+                className={cn(
+                  "cursor-pointer rounded p-1 hover:bg-zinc-800 hover:text-white",
+                  showThreads ? "text-white" : "text-gray-500"
+                )}
+              >
+                <History size={13} />
+              </button>
+            )}
             {config && chat.turns.length > 0 && (
               <button
                 type="button"
-                onClick={chat.newChat}
+                onClick={() => {
+                  setShowThreads(false);
+                  chat.newChat();
+                }}
                 disabled={chat.running}
                 title="New chat"
                 aria-label="New chat"
                 className="cursor-pointer rounded p-1 text-gray-500 hover:bg-zinc-800 hover:text-white disabled:cursor-default disabled:opacity-40"
               >
-                <RotateCcw size={13} />
+                <SquarePen size={13} />
               </button>
             )}
             <button
@@ -459,6 +510,23 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
             </button>
           </div>
         </header>
+
+        {config && showThreads && (
+          <ThreadList
+            threads={chat.threads}
+            current={chat.threadId}
+            onOpen={(id) => {
+              setShowThreads(false);
+              if (!chat.running) chat.openThread(id);
+              requestAnimationFrame(() => composer.current?.focus());
+            }}
+            onDelete={chat.deleteThread}
+            onClose={() => {
+              setShowThreads(false);
+              composer.current?.focus();
+            }}
+          />
+        )}
 
         {!config ? (
           <div className="min-h-0 flex-1 overflow-y-auto p-4">

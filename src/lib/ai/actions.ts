@@ -138,7 +138,12 @@ export function requestFor(action: WritingAction, selected: boolean, extra: stri
     improve: `Improve the writing of ${what}: clearer and tighter, in my voice. Make the changes as edits, and say in a line what you changed.`,
     remember: "",
   }[action.id];
-  return extra ? `${base}\n\nAlso: ${extra}` : base;
+  // A change to the selection is to the selection alone.
+  const inside =
+    selected && action.intent === "edit"
+      ? "\n\nChange only the selected text: every edit's `find` must be copied from inside the selection marks, even where the same words appear elsewhere in the note."
+      : "";
+  return extra ? `${base}${inside}\n\nAlso: ${extra}` : `${base}${inside}`;
 }
 
 /** The word at `position` in `text`, if the caret is in or against one. */

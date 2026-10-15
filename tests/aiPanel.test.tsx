@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import SetupChecklist from "../src/components/AiPanel/SetupChecklist";
 import TurnView from "../src/components/AiPanel/TurnView";
+import Composer from "../src/components/AiPanel/Composer";
+import ThreadList from "../src/components/AiPanel/ThreadList";
 import type { ChatTurn, EditCard, TurnEdits } from "../src/hooks/useAiChat";
 import type { AgentErrorKind, Detection } from "../src/lib/ai/protocol";
 import { applyEvent, emptyAnswer } from "../src/lib/ai/transcript";
@@ -251,5 +253,66 @@ describe("an answer that proposes edits", () => {
     expect(markup).toContain("Sure.");
     expect(markup).toContain("Writing the changes");
     expect(markup).not.toContain("nuza-edits");
+  });
+});
+
+describe("the composer", () => {
+  const props = {
+    value: "",
+    onChange: () => {},
+    onSend: () => {},
+    onStop: () => {},
+    onAction: () => {},
+    onEscape: () => {},
+    onFocus: () => {},
+    running: false,
+    intent: "ask" as const,
+    selected: false,
+    onWord: false,
+    models: [
+      { id: "haiku", name: "Haiku 5.5", description: "" },
+      { id: "opus", name: "Opus 5.5", description: "" },
+    ],
+    model: "haiku",
+    onModel: () => {},
+    used: 3,
+  };
+
+  test("shows the model's name with its arrow right after it", () => {
+    const markup = renderToStaticMarkup(<Composer {...props} />);
+    expect(markup).toMatch(/<span class="truncate">Haiku 5\.5<\/span><svg[^>]*lucide-chevron-up/);
+    expect(markup).not.toContain("Default model");
+  });
+
+  test("says what the context figure means", () => {
+    const markup = renderToStaticMarkup(<Composer {...props} />);
+    expect(markup).toContain("3% context");
+    expect(markup).toContain("This conversation fills 3% of what the agent can keep in mind at once");
+  });
+});
+
+describe("the list of chats", () => {
+  const now = Date.now();
+  const threads = [
+    { id: "a", title: "Is the timeline realistic?", updatedAt: now - 5 * 60_000, turns: [] },
+    { id: "b", title: "Synonym · weblog.md", updatedAt: now - 2 * 86_400_000, turns: [] },
+  ];
+
+  test("shows each with when it was last used, and a way to delete it", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadList threads={threads} current="a" onOpen={() => {}} onDelete={() => {}} onClose={() => {}} />
+    );
+    expect(markup).toContain("Is the timeline realistic?");
+    expect(markup).toContain("5m ago");
+    expect(markup).toContain("2d ago");
+    expect(markup).toContain('aria-label="Delete “Synonym · weblog.md”"');
+    expect(markup).toContain("Chats untouched for 7 days are deleted");
+  });
+
+  test("says so when there are none", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadList threads={[]} current="x" onOpen={() => {}} onDelete={() => {}} onClose={() => {}} />
+    );
+    expect(markup).toContain("No earlier chats in this folder.");
   });
 });
