@@ -529,6 +529,15 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
               requestAnimationFrame(() => composer.current?.focus());
             }}
             onDelete={chat.deleteThread}
+            onNew={
+              chat.turns.length > 0 && !chat.running
+                ? () => {
+                    setShowThreads(false);
+                    chat.newChat();
+                    requestAnimationFrame(() => composer.current?.focus());
+                  }
+                : undefined
+            }
             onClose={() => {
               setShowThreads(false);
               composer.current?.focus();
