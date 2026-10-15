@@ -142,3 +142,74 @@ describe("wikiLinkText", () => {
     expect(wikiLinkText("todo", "a [b]\n c|d")).toBe("[[todo|a b cd]]");
   });
 });
+
+describe("links looked up in an index of the vault", () => {
+  // The way links were resolved before the index: every note, every time.
+  function slowly(target: string, notes: string[], root: string, fromDirectory: string) {
+    const comparable = (path: string) =>
+      (path.startsWith(root) ? path.slice(root.length) : path)
+        .replace(/\\/g, "/")
+        .replace(/^\/+/, "")
+        .replace(/\.md$/i, "")
+        .toLowerCase();
+    const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
+    const wanted = target.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\.md$/i, "").toLowerCase();
+    if (!wanted) return null;
+    const byPath = wanted.includes("/");
+    const matches = notes.filter((note) => {
+      const path = comparable(note);
+      return byPath ? path === wanted : path.slice(path.lastIndexOf("/") + 1) === wanted;
+    });
+    if (matches.length <= 1) return matches[0] ?? null;
+    const depth = (note: string) => comparable(note).split("/").length;
+    return matches.slice().sort((a, b) => {
+      const besideA = folderOf(a) === fromDirectory ? 0 : 1;
+      const besideB = folderOf(b) === fromDirectory ? 0 : 1;
+      return besideA - besideB || depth(a) - depth(b) || a.localeCompare(b);
+    })[0];
+  }
+
+  const root = "/v";
+  const folders = ["", "/a", "/a/b", "/c", "/C"];
+  const names = ["Plan", "plan", "Ideas", "notes", "Zebra", "Plan.MD"];
+  const notes = folders.flatMap((folder) =>
+    names.map((name) => `${root}${folder}/${name}${name.endsWith(".MD") ? "" : ".md"}`)
+  );
+  const targets = [
+    "Plan",
+    "plan.md",
+    "PLAN",
+    "a/Plan",
+    "/a/b/plan",
+    "c/ideas",
+    "C/Ideas.md",
+    "missing",
+    "",
+    "  zebra  ",
+    "a\\b\\Notes",
+  ];
+
+  test("finds the same note as going through every note did", () => {
+    for (const target of targets)
+      for (const folder of folders)
+        expect(resolveWikiLink(target, notes, root, `${root}${folder}`)).toBe(
+          slowly(target, notes, root, `${root}${folder}`)
+        );
+  });
+
+  test("gives each note the same backlinks, in the same order", () => {
+    const links = notes.flatMap((from, n) =>
+      targets.map((target, line) => ({ from, target, line: line + n }))
+    );
+    for (const note of notes) {
+      const expected = links
+        .filter(
+          (link) =>
+            link.from !== note &&
+            slowly(link.target, notes, root, link.from.slice(0, link.from.lastIndexOf("/"))) === note
+        )
+        .sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line);
+      expect(backlinksTo(note, links, notes, root)).toEqual(expected);
+    }
+  });
+});

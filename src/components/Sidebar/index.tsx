@@ -1,4 +1,14 @@
-import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  Ref,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Regex, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -24,7 +34,7 @@ import {
 } from "@/lib/fileTree";
 import { samePath } from "@/lib/path";
 import { usePersistedState } from "@/hooks/usePersistedState";
-import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
+import { TreeContext, TreeActions, ContextMenuState, PendingCreate, createTreeMarks } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
 import ContextMenu, { ContextMenuItem } from "./ContextMenu";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
@@ -543,15 +553,24 @@ function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextMenu]);
 
+  // Handed to the rows apart from the context, so a change reaches only the
+  // rows it is about. Set before the browser paints, so the tree is never a
+  // frame behind the editor.
+  const markValues = {
+    currentFile,
+    selectedPath: selected?.path ?? null,
+    renamingPath,
+    pendingCreate,
+  };
+  const [marks] = useState(() => createTreeMarks(markValues));
+  useLayoutEffect(() => marks.set(markValues));
+
   const treeActions: TreeActions = useMemo(
     () => ({
       onFileSelect,
-      currentFile,
-      selectedPath: selected?.path ?? null,
-      renamingPath,
+      marks,
       submitRename,
       cancelRename,
-      pendingCreate,
       submitCreate,
       cancelCreate,
       openContextMenu,
@@ -561,12 +580,9 @@ function Sidebar({
     }),
     [
       onFileSelect,
-      currentFile,
-      selected,
-      renamingPath,
+      marks,
       submitRename,
       cancelRename,
-      pendingCreate,
       submitCreate,
       cancelCreate,
       openContextMenu,
