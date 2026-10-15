@@ -7,6 +7,7 @@ import {
   releasedOutside,
   takeTabDrag,
   tornOffFrame,
+  useDraggedTab,
   wasTabDragTaken,
   windowFrame,
 } from "@/lib/tabDrag";
@@ -66,12 +67,14 @@ function TabBar({
   const labels = useMemo(() => tabLabels(paths), [paths]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [fade, setFade] = useState({ start: false, end: false });
-  const [dragged, setDragged] = useState<string | null>(null);
+  // The app's own record of the drag, rather than a copy of it here: a drag
+  // that never heard its `dragend` is ended there, and the strip follows.
+  const dragged = useDraggedTab();
   /** Where a dragged tab would land: before the tab at this index. */
   const [dropBefore, setDropBefore] = useState<number | null>(null);
 
   function endDrag() {
-    setDragged(null);
+    endTabDrag();
     setDropBefore(null);
   }
 
@@ -173,19 +176,21 @@ function TabBar({
             onDragStart={(event) => {
               event.dataTransfer.setData(TAB_DRAG_TYPE, path);
               event.dataTransfer.effectAllowed = "move";
+              setDropBefore(null);
               beginTabDrag(path);
-              setDragged(path);
             }}
             onDragEnd={(event) => {
               // Nothing in the app took it and it was let go of past the edge
               // of the window: that is the tab being torn off, rather than a
               // drag that was cancelled or declined.
-              if (onTearOff && !wasTabDragTaken()) {
-                const frame = windowFrame();
-                if (releasedOutside(event, frame)) onTearOff(path, tornOffFrame(event, frame));
+              try {
+                if (onTearOff && !wasTabDragTaken()) {
+                  const frame = windowFrame();
+                  if (releasedOutside(event, frame)) onTearOff(path, tornOffFrame(event, frame));
+                }
+              } finally {
+                endDrag();
               }
-              endTabDrag();
-              endDrag();
             }}
             onDragOver={(event) => {
               if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;

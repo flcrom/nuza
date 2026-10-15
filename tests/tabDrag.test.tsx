@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import SplitDropZone from "../src/components/SplitDropZone";
 import {
@@ -42,6 +43,44 @@ describe("the dragged tab", () => {
 
     stop();
     beginTabDrag("/v/b.md");
+    expect(announced).toBe(2);
+  });
+});
+
+describe("a drag whose end never came", () => {
+  const window = new Window();
+  const original = globalThis.window;
+  beforeEach(() => {
+    globalThis.window = window as unknown as typeof globalThis.window;
+  });
+  afterEach(() => {
+    endTabDrag();
+    globalThis.window = original;
+  });
+  const move = (buttons: number) =>
+    window.dispatchEvent(new window.MouseEvent("mousemove", { buttons }) as unknown as Event);
+
+  test("is over the first time the pointer moves with no button held", () => {
+    beginTabDrag("/v/a.md");
+    move(1);
+    expect(draggedTab()).toBe("/v/a.md");
+    move(0);
+    expect(draggedTab()).toBeNull();
+  });
+
+  test("is over when the pointer is pressed again", () => {
+    beginTabDrag("/v/a.md");
+    window.dispatchEvent(new window.MouseEvent("mousedown") as unknown as Event);
+    expect(draggedTab()).toBeNull();
+  });
+
+  test("stops listening once it is over", () => {
+    let announced = 0;
+    const stop = subscribe(() => announced++);
+    beginTabDrag("/v/a.md");
+    endTabDrag();
+    move(0);
+    stop();
     expect(announced).toBe(2);
   });
 });

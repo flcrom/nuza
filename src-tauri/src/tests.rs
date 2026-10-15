@@ -1696,6 +1696,42 @@ fn stuck_calls_do_not_use_the_pool_up() {
     );
 }
 
+/// A scan of the whole vault queues a read for every note; something the
+/// writer is waiting on - the check after a rename, a folder being opened -
+/// goes ahead of all of them rather than behind.
+#[test]
+fn a_call_someone_is_waiting_on_goes_before_a_scan() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const READS: usize = 300;
+    let begun = Arc::new(AtomicUsize::new(0));
+    let counting = begun.clone();
+    let scan = std::thread::spawn(move || {
+        crate::slow::in_background(|| {
+            let reads: Vec<Box<dyn FnOnce() + Send>> = (0..READS)
+                .map(|_| {
+                    let begun = counting.clone();
+                    Box::new(move || {
+                        begun.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(10));
+                    }) as Box<dyn FnOnce() + Send>
+                })
+                .collect();
+            run_all(reads, Duration::from_secs(60))
+        })
+    });
+    // Until the scan's reads are queued and under way.
+    while begun.load(Ordering::SeqCst) == 0 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let seen = begun.clone();
+    let when = run_one(move || seen.load(Ordering::SeqCst), Duration::from_secs(30));
+    // Behind the scan, it would only have run once nearly every read had.
+    let when = when.expect("answered");
+    assert!(when < READS / 2, "ran after {when} of {READS} reads");
+    assert!(scan.join().unwrap().iter().all(Option::is_some));
+}
+
 const QUICK: Patience = Patience {
     entry: Duration::from_millis(500),
     listing: Duration::from_secs(5),

@@ -1,7 +1,7 @@
 {
   "name": "nuza",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -40,6 +40,7 @@
     "lucide-react": "^1.47.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "style-mod": "^4.1.4",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

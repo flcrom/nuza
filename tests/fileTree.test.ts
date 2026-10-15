@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   addEntry,
   addFile,
+  createTarget,
   ensureDirectory,
   findEntry,
   hasUnavailable,
@@ -399,5 +400,42 @@ describe("a vault at a drive or filesystem root", () => {
   test("still replaces the root's own children", () => {
     const children = [{ name: "b.md", path: "/b.md", isDirectory: false }];
     expect(setChildren(slash, "/", "/", children)).toEqual(children);
+  });
+});
+
+describe("where the sidebar's New File and New Folder put things", () => {
+  const root = "/v";
+  const tree = [
+    {
+      name: "essays",
+      path: "/v/essays",
+      isDirectory: true,
+      children: [
+        { name: "draft.md", path: "/v/essays/draft.md", isDirectory: false },
+        { name: "new", path: "/v/essays/new", isDirectory: true, children: [] },
+      ],
+    },
+    { name: "unread", path: "/v/unread", isDirectory: true },
+    { name: "index.md", path: "/v/index.md", isDirectory: false },
+  ];
+  const folder = (path: string) => ({ path, isDirectory: true });
+  const file = (path: string) => ({ path, isDirectory: false });
+
+  test("into the folder selected, as soon as it is made", () => {
+    expect(createTarget(tree, root, folder("/v/essays"))).toBe("/v/essays");
+    expect(createTarget(tree, root, folder("/v/essays/new"))).toBe("/v/essays/new");
+  });
+
+  test("beside the file selected, even in a folder the tree has not opened", () => {
+    expect(createTarget(tree, root, file("/v/essays/draft.md"))).toBe("/v/essays");
+    expect(createTarget(tree, root, file("/v/index.md"))).toBe(root);
+    expect(createTarget(tree, root, file("/v/unread/deep/note.md"))).toBe("/v/unread/deep");
+  });
+
+  test("at the top of the vault with nothing selected, a folder that has gone, or anything outside", () => {
+    expect(createTarget(tree, root, null)).toBe(root);
+    expect(createTarget(tree, root, folder(root))).toBe(root);
+    expect(createTarget(tree, root, folder("/v/essays/deleted"))).toBe(root);
+    expect(createTarget(tree, root, file("/elsewhere/note.md"))).toBe(root);
   });
 });

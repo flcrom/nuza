@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Check, ChevronRight, FilePlus, FileText, LoaderCircle, X } from "lucide-react";
 import { cn } from "cn";
 import { tookFor } from "@/lib/ai/time";
@@ -304,7 +305,7 @@ function Working({ parts, streaming, took }: { parts: Part[]; streaming: boolean
 }
 
 /** One question and its answer, as it streams. */
-export default function TurnView({ turn, agent, actions }: TurnViewProps) {
+function TurnView({ turn, agent, actions }: TurnViewProps) {
   const { answer } = turn;
   const streaming = answer.state === "streaming";
   const hasWords = answer.parts.some((part) => part.type === "text" && forDisplay(proseOf(part.text)).trim());
@@ -375,3 +376,6 @@ export default function TurnView({ turn, agent, actions }: TurnViewProps) {
     </div>
   );
 }
+
+/** Drawn again only when its own turn changes, not whenever the panel does. */
+export default memo(TurnView);

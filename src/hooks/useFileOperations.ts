@@ -1399,40 +1399,49 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * With no folder open there is nowhere to make one, and the scratch note is
    * what there is to write in.
    */
-  const createNote = useCallback(() => {
-    const root = rootPathRef.current;
-    if (!root) return;
+  const createNote = useCallback(
+    (folder?: string | null) => {
+      const root = rootPathRef.current;
+      if (!root) return;
 
-    const here = currentFileRef.current;
-    const parent =
-      !draftPathsRef.current.has(here) && isWithin(here, root) ? directoryOf(here) || root : root;
+      // The folder selected in the sidebar, when there is one - a folder just
+      // made there is where the next note goes - and otherwise beside the note.
+      const here = currentFileRef.current;
+      const parent =
+        folder && isWithin(folder, root)
+          ? folder
+          : !draftPathsRef.current.has(here) && isWithin(here, root)
+            ? directoryOf(here) || root
+            : root;
 
-    // The names the index and the tree know of in that folder, and the drafts
-    // already open or kept there - none of those three is sure to be
-    // complete on its own.
-    const taken = new Set<string>();
-    for (const path of fileIndexRef.current.paths) {
-      if (directoryOf(path) === parent) taken.add(fileNameOf(path));
-    }
-    const listed =
-      parent === root ? folderDataRef.current : findEntry(folderDataRef.current, parent)?.children;
-    for (const entry of listed ?? []) taken.add(entry.name);
-    for (const path of draftPathsRef.current) {
-      if (directoryOf(path) === parent) taken.add(fileNameOf(path));
-    }
-    for (const path of Object.keys(readScratch())) {
-      if (directoryOf(path) === parent) taken.add(fileNameOf(path));
-    }
+      // The names the index and the tree know of in that folder, and the drafts
+      // already open or kept there - none of those three is sure to be
+      // complete on its own.
+      const taken = new Set<string>();
+      for (const path of fileIndexRef.current.paths) {
+        if (directoryOf(path) === parent) taken.add(fileNameOf(path));
+      }
+      const listed =
+        parent === root ? folderDataRef.current : findEntry(folderDataRef.current, parent)?.children;
+      for (const entry of listed ?? []) taken.add(entry.name);
+      for (const path of draftPathsRef.current) {
+        if (directoryOf(path) === parent) taken.add(fileNameOf(path));
+      }
+      for (const path of Object.keys(readScratch())) {
+        if (directoryOf(path) === parent) taken.add(fileNameOf(path));
+      }
 
-    const path = joinPath(parent, untitledName(taken));
+      const path = joinPath(parent, untitledName(taken));
 
-    leavePlace();
-    setDraftPaths((paths) => new Set(paths).add(path));
-    openDocument(path, "");
-    setOpenPaths((paths) => [...paths, path]);
-    setCurrentFile(path);
-    recentRef.current = [path, ...recentRef.current.filter((p) => p !== path)];
-  }, [openDocument, leavePlace]);
+      leavePlace();
+      setDraftPaths((paths) => new Set(paths).add(path));
+      openDocument(path, "");
+      setOpenPaths((paths) => [...paths, path]);
+      setCurrentFile(path);
+      recentRef.current = [path, ...recentRef.current.filter((p) => p !== path)];
+    },
+    [openDocument, leavePlace]
+  );
 
   /**
    * Copies a note beside itself as "name 1.md" and opens the copy. Edits not
@@ -1584,8 +1593,18 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
   const deleteEntry = useCallback(
     async (path: string) => {
-      await invoke("delete_entry", { path });
-      setFolderData((tree) => removeEntry(tree, rootPathRef.current ?? "", path));
+      // Gone from the tree as soon as it is asked for, and put back if the
+      // Trash would not take it: the move itself can take a moment, and a row
+      // still sitting there after Delete reads as the click not landing.
+      const root = rootPathRef.current ?? "";
+      const gone = findEntry(folderDataRef.current, path);
+      setFolderData((tree) => removeEntry(tree, root, path));
+      try {
+        await invoke("delete_entry", { path });
+      } catch (error) {
+        if (gone) setFolderData((tree) => (findEntry(tree, path) ? tree : addEntry(tree, root, gone)));
+        throw error;
+      }
 
       forgetDocuments((open) => isWithin(open, path));
       setSideFile((side) => (side && isWithin(side, path) ? null : side));

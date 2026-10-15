@@ -1,4 +1,14 @@
-import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  Ref,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Regex, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -12,10 +22,19 @@ import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation
 import { report } from "@/lib/notices";
 import { revealLabel } from "@/lib/platform";
 import { FileEntry } from "@/lib/types";
-import { SORT_ORDERS, SortOrder, parentOf, sortTree } from "@/lib/fileTree";
+import {
+  SORT_ORDERS,
+  SortOrder,
+  TreeSelection,
+  createTarget,
+  joinPath,
+  nameOf,
+  parentOf,
+  sortTree,
+} from "@/lib/fileTree";
 import { samePath } from "@/lib/path";
 import { usePersistedState } from "@/hooks/usePersistedState";
-import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
+import { TreeContext, TreeActions, ContextMenuState, PendingCreate, createTreeMarks } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
 import ContextMenu, { ContextMenuItem } from "./ContextMenu";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
@@ -31,10 +50,18 @@ import { useTags } from "@/hooks/useTags";
 import { Vault } from "@/lib/vaults";
 
 /** What the rest of the app can ask the sidebar to do. */
+/** The tree row `row` is, as a selection: a folder's row is its `<summary>`. */
+function rowSelection(row: HTMLElement | null): TreeSelection | null {
+  const path = row?.dataset.path;
+  return path ? { path, isDirectory: row.tagName === "SUMMARY" } : null;
+}
+
 export interface SidebarHandle {
   focusSearch: () => void;
   /** Puts the keyboard in the tree, on the open note if it is showing. */
   focusTree: () => void;
+  /** The folder selected in the tree - or the selected note's - for a new note to go in. */
+  newNoteFolder: () => string | null;
 }
 
 interface SidebarProps {
@@ -126,6 +153,23 @@ function Sidebar({
   const view = readView(storedView);
   // Only for a note in the vault: the scratch note has no name to link to.
   const inVault = !!rootPath && currentFile.startsWith(rootPath);
+  /**
+   * The row selected in the tree, as in VS Code's explorer: the last one
+   * clicked, stepped to with the keys or just made, or the note that was
+   * opened since. New files and folders from the header go into it - beside
+   * it, for a file - so a folder just made is where the next note goes.
+   */
+  const [selected, setSelected] = useState<TreeSelection | null>(null);
+  const [followed, setFollowed] = useState({ currentFile, rootPath });
+  if (followed.currentFile !== currentFile || followed.rootPath !== rootPath) {
+    setFollowed({ currentFile, rootPath });
+    if (followed.rootPath !== rootPath) setSelected(null);
+    if (inVault) setSelected({ path: currentFile, isDirectory: false });
+  }
+  /** Where the header's New File and New Folder put what they make, and where a new note goes. */
+  const headerTarget = rootPath ? createTarget(data, rootPath, selected) : null;
+  const headerTargetName =
+    headerTarget && rootPath && headerTarget !== rootPath ? nameOf(headerTarget) : null;
   // Fetched folded too: the count on the heading is worth having on its own.
   const backlinks = useBacklinks(currentFile, rootPath ?? null, notes, inVault);
   const tags = useTags(currentFile, rootPath ?? null, notes, !!rootPath && view === "tags");
@@ -200,6 +244,7 @@ function Sidebar({
     // The panel is `inert` until it is open, and inert elements refuse focus,
     // so this waits for the frame the attribute comes off in.
     focusTree: () => requestAnimationFrame(focusOpenRow),
+    newNoteFolder: () => headerTarget,
   }));
 
   function selectResult(path: string) {
@@ -324,7 +369,7 @@ function Sidebar({
   }, []);
 
   function beginCreate(type: "file" | "folder", parentPath?: string) {
-    const target = parentPath ?? rootPath;
+    const target = parentPath ?? headerTarget;
     if (!target) return;
     setRenamingPath(null);
     setPendingCreate({ parentPath: target, type });
@@ -338,6 +383,7 @@ function Sidebar({
       try {
         if (type === "file") await onCreateFile(parentPath, name);
         else await onCreateFolder(parentPath, name);
+        setSelected({ path: joinPath(parentPath, name), isDirectory: type === "folder" });
       } catch (error) {
         report(`Couldn't create "${name}"`, error);
       }
@@ -507,14 +553,24 @@ function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextMenu]);
 
+  // Handed to the rows apart from the context, so a change reaches only the
+  // rows it is about. Set before the browser paints, so the tree is never a
+  // frame behind the editor.
+  const markValues = {
+    currentFile,
+    selectedPath: selected?.path ?? null,
+    renamingPath,
+    pendingCreate,
+  };
+  const [marks] = useState(() => createTreeMarks(markValues));
+  useLayoutEffect(() => marks.set(markValues));
+
   const treeActions: TreeActions = useMemo(
     () => ({
       onFileSelect,
-      currentFile,
-      renamingPath,
+      marks,
       submitRename,
       cancelRename,
-      pendingCreate,
       submitCreate,
       cancelCreate,
       openContextMenu,
@@ -524,11 +580,9 @@ function Sidebar({
     }),
     [
       onFileSelect,
-      currentFile,
-      renamingPath,
+      marks,
       submitRename,
       cancelRename,
-      pendingCreate,
       submitCreate,
       cancelCreate,
       openContextMenu,
@@ -580,14 +634,14 @@ function Sidebar({
             </button>
             <button
               onClick={() => beginCreate("file")}
-              title="New File"
+              title={headerTargetName ? `New File in ${headerTargetName}` : "New File"}
               className="cursor-pointer rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-white"
             >
               <FilePlus className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={() => beginCreate("folder")}
-              title="New Folder"
+              title={headerTargetName ? `New Folder in ${headerTargetName}` : "New Folder"}
               className="cursor-pointer rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-white"
             >
               <FolderPlus className="h-3.5 w-3.5" />
@@ -684,8 +738,20 @@ function Sidebar({
         onKeyDown={onTreeKeyDown}
         onFocus={(e) => {
           // Only when the panel itself was focused. A row taking focus - by
-          // click, or from the keys above - is already where it should be.
+          // click, or from the keys above - is already where it should be,
+          // and is the one selected.
           if (e.target === e.currentTarget) focusOpenRow();
+          else if (e.target instanceof HTMLElement) setSelected(rowSelection(e.target));
+        }}
+        // A click selects its row - WebKit does not focus a button that is
+        // clicked - and a click on the space below the rows selects nothing,
+        // so what is made next goes at the top of the vault.
+        onClick={(e) => {
+          if (showResults) return;
+          const target = e.target as Element;
+          // Typing a name in, rather than choosing a row.
+          if (target.closest("input")) return;
+          setSelected(rowSelection(target.closest<HTMLElement>("[data-path]")));
         }}
         onContextMenu={(e) => {
           if (!hasFolder) return;

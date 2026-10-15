@@ -336,6 +336,23 @@ pub(crate) fn trashing() -> trash::TrashContext {
     context
 }
 
+/// Readies the Trash, so the first note deleted goes as quickly as the rest.
+///
+/// The first `trashItemAtURL` in a run of the app costs a quarter of a second
+/// or more - Foundation setting itself up - and every one after it well under
+/// a millisecond, so the first delete of each session was the one that hung.
+/// Asking it to trash a path that is not there pays that cost on a thread of
+/// its own at launch, and puts nothing in the Trash.
+#[cfg(target_os = "macos")]
+pub(crate) fn warm_trash() {
+    std::thread::spawn(|| {
+        let nowhere = std::env::temp_dir().join(format!("nuza-nothing-{}", std::process::id()));
+        if !nowhere.exists() {
+            let _ = trashing().delete(&nowhere);
+        }
+    });
+}
+
 /// Everywhere else the default asks for nothing and is the right one.
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn trashing() -> trash::TrashContext {
