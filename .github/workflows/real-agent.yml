@@ -60,10 +60,12 @@ jobs:
           npm install -g opencode-ai@1.19.0
           opencode --version
 
+      # One at a time: two first runs of OpenCode at once fight over its
+      # database. nuza itself only ever runs the one.
       # A turn through the harness, and - on macOS and Linux - the agent asked
       # plainly to read a file in home and to write into the vault, home and
       # its session folder, none of which it may.
       - name: a real turn, inside the fence
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture real_opencode_streams_through_the_harness real_opencode_is_fenced_in
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture --test-threads=1 real_opencode_streams_through_the_harness real_opencode_is_fenced_in
         env:
           NUZA_REQUIRE_LANDLOCK: ${{ matrix.platform == 'ubuntu-22.04' && '1' || '' }}

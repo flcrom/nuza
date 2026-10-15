@@ -17,6 +17,8 @@ one-time notice saying what it will be sent.
 | **OpenCode**       | `curl -fsSL https://opencode.ai/install \| bash`, or `npm install -g opencode-ai` | Run `opencode auth login`                   |
 | **Something else** | Any program that speaks the Agent Client Protocol (ACP) over its input and output | However that program does it                |
 
+OpenCode's free models sometimes refuse to answer anywhere but inside OpenCode itself. If it says so, sign in to a provider with `opencode auth login`.
+
 For Claude Code and Codex, nuza starts a small adapter that lets them speak ACP,
 at a pinned version, with `npx`. The first start downloads it and can take a
 few minutes; after that it starts in seconds.
