@@ -808,7 +808,7 @@ function App() {
       "reopen-closed-tab": () => void reopenClosedTab(),
       "go-back": () => void retrace("back"),
       "go-forward": () => void retrace("forward"),
-      "new-note": () => void createNote(),
+      "new-note": () => void createNote(sidebarRef.current?.newNoteFolder()),
       "reset-font-size": () => setEditorFontSize(DEFAULT_EDITOR_FONT_SIZE),
       "toggle-inline-code": () => format(toggleInlineCode),
       "toggle-strikethrough": () => format(toggleStrikethrough),

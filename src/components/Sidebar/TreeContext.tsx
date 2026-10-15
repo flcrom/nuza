@@ -19,6 +19,8 @@ export type ContextMenuState = {
 export interface TreeActions {
   onFileSelect?: (path: string) => void;
   currentFile: string;
+  /** The row selected in the tree: where the header's New File and New Folder put things. */
+  selectedPath: string | null;
   renamingPath: string | null;
   submitRename: (path: string, newName: string) => void;
   cancelRename: () => void;

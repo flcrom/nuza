@@ -34,7 +34,7 @@ import SetupChecklist from "./SetupChecklist";
 import { CitationContext, type Citations } from "./citations";
 import { invoke } from "@tauri-apps/api/core";
 import { report } from "@/lib/notices";
-import TurnView from "./TurnView";
+import TurnView, { type TurnActions } from "./TurnView";
 import ThreadList from "./ThreadList";
 import Composer, { type ComposerHandle } from "./Composer";
 import {
@@ -439,6 +439,47 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
   const used = lastTurn ? contextUsed(lastTurn.answer) : null;
   const signIn = config?.kind === "codex" ? () => void agent.login() : undefined;
 
+  // The latest of everything a turn's buttons reach for, read when one is
+  // pressed. Switching notes changes most of them, and the turns - each a
+  // whole answer to lay out again - should not be drawn again for it.
+  const reach = useRef({
+    retry,
+    decide,
+    focus,
+    show,
+    openNote,
+    markNote: chat.markNote,
+    onOpenSettings,
+    signIn,
+  });
+  useEffect(() => {
+    reach.current = { retry, decide, focus, show, openNote, markNote: chat.markNote, onOpenSettings, signIn };
+  });
+  const canSignIn = !!signIn;
+  const turnActions = useMemo<TurnActions>(
+    () => ({
+      onRetry: (turn) => reach.current.retry(turn),
+      onOpenSettings: () => reach.current.onOpenSettings(),
+      onSignIn: canSignIn ? () => reach.current.signIn?.() : undefined,
+      onAccept: (turn, card) => reach.current.decide(turn, card, true),
+      onReject: (turn, card) => reach.current.decide(turn, card, false),
+      onAcceptAll: (turn) => reach.current.decide(turn, null, true),
+      onRejectAll: (turn) => reach.current.decide(turn, null, false),
+      onFocus: (turn, card) => reach.current.focus(turn, card),
+      onShow: (turn) => void reach.current.show(turn),
+      onCreateNote: (turn, note) => {
+        invoke<string>("create_note", { path: note.path, content: note.content })
+          .then((made) => {
+            reach.current.markNote(turn.id, note.id, "created");
+            void reach.current.openNote(made);
+          })
+          .catch((error) => reach.current.markNote(turn.id, note.id, "failed", String(error)));
+      },
+      onDiscardNote: (turn, note) => reach.current.markNote(turn.id, note.id, "discarded"),
+    }),
+    [canSignIn]
+  );
+
   // The notes the agent has been shown, which its citations may open - asked
   // again whenever an answer finishes.
   const [citable, setCitable] = useState<ReadonlySet<string>>(new Set());
@@ -591,31 +632,7 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
                 </div>
               )}
               {chat.turns.map((turn) => (
-                <TurnView
-                  key={turn.id}
-                  turn={turn}
-                  agent={label}
-                  actions={{
-                    onRetry: retry,
-                    onOpenSettings,
-                    onSignIn: signIn,
-                    onAccept: (turn, card) => decide(turn, card, true),
-                    onReject: (turn, card) => decide(turn, card, false),
-                    onAcceptAll: (turn) => decide(turn, null, true),
-                    onRejectAll: (turn) => decide(turn, null, false),
-                    onFocus: focus,
-                    onShow: (turn) => void show(turn),
-                    onCreateNote: (turn, note) => {
-                      invoke<string>("create_note", { path: note.path, content: note.content })
-                        .then((made) => {
-                          chat.markNote(turn.id, note.id, "created");
-                          void openNote(made);
-                        })
-                        .catch((error) => chat.markNote(turn.id, note.id, "failed", String(error)));
-                    },
-                    onDiscardNote: (turn, note) => chat.markNote(turn.id, note.id, "discarded"),
-                  }}
-                />
+                <TurnView key={turn.id} turn={turn} agent={label} actions={turnActions} />
               ))}
               {agent.error && chat.turns.length === 0 && (
                 <p role="alert" className="text-xs text-amber-400">
