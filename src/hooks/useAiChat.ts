@@ -82,6 +82,7 @@ function cardsFor(proposals: Proposal[], status: EditStatus): EditCard[] {
 async function prompt(
   text: string,
   inFull: string | null,
+  notePath: string | null,
   model: string | null,
   onEvent: (event: AgentEvent) => void
 ): Promise<Answer> {
@@ -92,7 +93,7 @@ async function prompt(
     onEvent(event);
   };
   try {
-    await invoke("agent_prompt", { text, inFull, model, onEvent: channel });
+    await invoke("agent_prompt", { text, inFull, notePath, model, onEvent: channel });
   } catch (error) {
     answer = { ...answer, state: "failed", error: { code: "other", message: reasonFor(error) } };
   }
@@ -229,7 +230,7 @@ export function useAiChat(agent: string, access: NoteAccess) {
       // One retry, never two, and not shown as a question of its own.
       updateEdits(id, { aligning: true });
       const failed = parsed.failed ?? [];
-      const retry = await prompt(retryRequest(failed), null, model, () => {});
+      const retry = await prompt(retryRequest(failed), null, path, model, () => {});
       const { proposals, unplaced } =
         retry.state === "done"
           ? afterRetry(parsed.resolved ?? [], failed.length, answerText(retry), context.note)
@@ -258,7 +259,7 @@ export function useAiChat(agent: string, access: NoteAccess) {
 
       setTurns((all) => [...all, { id, question, intent, context, answer: emptyAnswer(), edits: null }]);
 
-      const answer = await prompt(sent, unchanged ? full : null, model, (event) => {
+      const answer = await prompt(sent, unchanged ? full : null, path, model, (event) => {
         // A turn that did not finish may not have reached the agent whole, so
         // the next one sends everything again.
         if (event.kind === "failed") lastNote.current = null;

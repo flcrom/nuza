@@ -11,7 +11,7 @@
  */
 
 import { SELECTION_END, SELECTION_START } from "./markers";
-import { FRAMING_PHRASES } from "./prompt";
+import { FRAMING_PHRASES, HARNESS_PHRASES } from "./prompt";
 
 /** nuza's delimiter around the note, which is never part of an answer. */
 const NOTE_TAG = /<\/?note id="[^"\n]*">/g;
@@ -25,7 +25,7 @@ export function forDisplay(answer: string): string {
   const cleaned = answer.replace(NOTE_TAG, "").split(SELECTION_START).join("").split(SELECTION_END).join("");
   return cleaned
     .split("\n")
-    .filter((line) => !FRAMING_PHRASES.some((phrase) => line.includes(phrase)))
+    .filter((line) => ![...FRAMING_PHRASES, ...HARNESS_PHRASES].some((phrase) => line.includes(phrase)))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
 }
@@ -43,6 +43,24 @@ export type Block =
   | { type: "code"; language: string; text: string }
   | { type: "quote"; children: Inline[] }
   | { type: "list"; ordered: boolean; items: Inline[][] };
+
+/**
+ * A citation of a note: `nuza:projects/release.md#12` is paragraph 12 of
+ * that note. Whether it opens anything is decided elsewhere - only notes the
+ * agent was actually shown do.
+ */
+export function parseCitation(href: string): { path: string; paragraph: number | null } | null {
+  const match = /^nuza:([^#]+?)(?:#(\d+))?$/.exec(href.trim());
+  if (!match) return null;
+  let path: string;
+  try {
+    path = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  if (!path || path.startsWith("/") || path.split("/").includes("..")) return null;
+  return { path, paragraph: match[2] ? Number(match[2]) : null };
+}
 
 /** Whether an address is one the panel will open: the web, nothing else. */
 export function isWebLink(href: string): boolean {

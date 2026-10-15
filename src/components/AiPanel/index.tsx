@@ -21,6 +21,9 @@ import {
 import type { EditCard } from "@/hooks/useAiChat";
 import ContextBox, { type ContextFile } from "./ContextBox";
 import SetupChecklist from "./SetupChecklist";
+import { CitationContext, type Citations } from "./citations";
+import { invoke } from "@tauri-apps/api/core";
+import { report } from "@/lib/notices";
 import TurnView from "./TurnView";
 
 /** The note a question is about, as the editor has it right now. */
@@ -47,6 +50,8 @@ interface AiPanelProps {
   viewFor: (path: string) => EditorView | null;
   /** Brings the note at `path` into the editor. */
   openNote: (path: string) => Promise<void>;
+  /** Brings the note at `path` into the editor at `line`. */
+  openAt: (path: string, line: number) => void;
   sendWholeNote: boolean;
   vaultPath: string | null;
   modelChoices: ModelChoices;
@@ -102,6 +107,7 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
     onOpenSettings,
     viewFor,
     openNote,
+    openAt,
   },
   ref
 ) {
@@ -312,171 +318,200 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
   const used = lastTurn ? contextUsed(lastTurn.answer) : null;
   const signIn = config?.kind === "codex" ? () => void agent.login() : undefined;
 
+  // The notes the agent has been shown, which its citations may open - asked
+  // again whenever an answer finishes.
+  const [citable, setCitable] = useState<ReadonlySet<string>>(new Set());
+  const lastState = lastTurn?.answer.state;
+  useEffect(() => {
+    if (lastState !== "done") return;
+    invoke<string[]>("agent_citable")
+      .then((paths) => setCitable(new Set(paths)))
+      .catch(() => setCitable(new Set()));
+  }, [lastState, lastTurn?.id]);
+  const citations = useMemo<Citations>(
+    () => ({
+      citable,
+      open(path, paragraph) {
+        invoke<{ path: string; line: number }>("agent_cite", { path, paragraph })
+          .then((cited) => openAt(cited.path, cited.line))
+          .catch((error) => report("Couldn't open that note", error));
+      },
+    }),
+    [citable, openAt]
+  );
+  const cannotSearch =
+    agent.state?.vaultSearch && agent.state.agentSearches === false
+      ? `${label} can't search your vault, so nuza is sending the note text instead.`
+      : null;
+
   return (
-    <aside
-      data-own-keys={PANEL_KEYS}
-      onKeyDown={onPanelKey}
-      aria-label="AI"
-      className="relative flex h-full flex-col overflow-hidden rounded-t-lg bg-[var(--nuza-editor-tint)] text-sm"
-      style={{ width }}
-    >
-      <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-zinc-800/80 px-3">
-        <h2 className="truncate text-xs font-medium text-gray-300">
-          Ask AI{config && <span className="text-gray-500"> · {label}</span>}
-        </h2>
-        <div className="flex items-center gap-1">
-          {config && chat.turns.length > 0 && (
+    <CitationContext.Provider value={citations}>
+      <aside
+        data-own-keys={PANEL_KEYS}
+        onKeyDown={onPanelKey}
+        aria-label="AI"
+        className="relative flex h-full flex-col overflow-hidden rounded-t-lg bg-[var(--nuza-editor-tint)] text-sm"
+        style={{ width }}
+      >
+        <header className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-zinc-800/80 px-3">
+          <h2 className="truncate text-xs font-medium text-gray-300">
+            Ask AI{config && <span className="text-gray-500"> · {label}</span>}
+          </h2>
+          <div className="flex items-center gap-1">
+            {config && chat.turns.length > 0 && (
+              <button
+                type="button"
+                onClick={chat.newChat}
+                disabled={chat.running}
+                title="New chat"
+                aria-label="New chat"
+                className="cursor-pointer rounded p-1 text-gray-500 hover:bg-zinc-800 hover:text-white disabled:cursor-default disabled:opacity-40"
+              >
+                <RotateCcw size={13} />
+              </button>
+            )}
             <button
               type="button"
-              onClick={chat.newChat}
-              disabled={chat.running}
-              title="New chat"
-              aria-label="New chat"
-              className="cursor-pointer rounded p-1 text-gray-500 hover:bg-zinc-800 hover:text-white disabled:cursor-default disabled:opacity-40"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close the AI panel"
+              className="cursor-pointer rounded p-1 text-gray-500 hover:bg-zinc-800 hover:text-white"
             >
-              <RotateCcw size={13} />
+              <X size={14} />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close"
-            aria-label="Close the AI panel"
-            className="cursor-pointer rounded p-1 text-gray-500 hover:bg-zinc-800 hover:text-white"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      </header>
-
-      {!config ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <SetupChecklist
-            detection={agent.detection}
-            starting={agent.starting}
-            error={agent.error?.message ?? null}
-            onUse={(preset) => void agent.use(preset.config)}
-            onOpenSettings={onOpenSettings}
-          />
-        </div>
-      ) : (
-        <>
-          <div ref={scroller} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-3">
-            {chat.turns.length === 0 && (
-              <p className="text-xs leading-relaxed text-gray-500">
-                {intent === "edit"
-                  ? `Say what to change, and ${label} will suggest it.`
-                  : `Ask ${label} about this note${files[0]?.detail?.startsWith("line") ? ", or the part you selected" : ""}.`}
-              </p>
-            )}
-            {chat.turns.map((turn) => (
-              <TurnView
-                key={turn.id}
-                turn={turn}
-                agent={label}
-                actions={{
-                  onRetry: retry,
-                  onOpenSettings,
-                  onSignIn: signIn,
-                  onAccept: (turn, card) => decide(turn, card, true),
-                  onReject: (turn, card) => decide(turn, card, false),
-                  onAcceptAll: (turn) => decide(turn, null, true),
-                  onRejectAll: (turn) => decide(turn, null, false),
-                  onFocus: focus,
-                  onShow: (turn) => void show(turn),
-                }}
-              />
-            ))}
-            {agent.error && chat.turns.length === 0 && (
-              <p role="alert" className="text-xs text-amber-400">
-                {agent.error.message}
-              </p>
-            )}
           </div>
+        </header>
 
-          <div className="shrink-0 border-t border-zinc-800/80 p-2">
-            {!prepared.ok && (
-              <p role="alert" className="px-1 pb-1.5 text-xs text-amber-400">
-                {prepared.message}
-              </p>
-            )}
-            <ContextBox
-              files={files}
-              reviewable={!!reviewTarget}
-              onReview={() => reviewTarget && focus(reviewTarget.turn, reviewTarget.card)}
+        {!config ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <SetupChecklist
+              detection={agent.detection}
+              starting={agent.starting}
+              error={agent.error?.message ?? null}
+              onUse={(preset) => void agent.use(preset.config)}
+              onOpenSettings={onOpenSettings}
             />
-            <div className="rounded-md border border-zinc-700 bg-zinc-900/70 focus-within:border-[var(--nuza-accent)]">
-              <textarea
-                ref={composer}
-                value={question}
-                rows={2}
-                onChange={(event) => setQuestion(event.target.value)}
-                onKeyDown={onComposerKey}
-                onFocus={look}
-                placeholder={intent === "edit" ? "Describe the change…" : "Ask about this note…"}
-                aria-label={intent === "edit" ? "The change you want" : "Your question"}
-                className="block w-full resize-none bg-transparent px-2 pt-2 text-sm text-white outline-none placeholder:text-gray-600"
+          </div>
+        ) : (
+          <>
+            <div ref={scroller} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-3">
+              {chat.turns.length === 0 && (
+                <p className="text-xs leading-relaxed text-gray-500">
+                  {intent === "edit"
+                    ? `Say what to change, and ${label} will suggest it.`
+                    : `Ask ${label} about this note${files[0]?.detail?.startsWith("line") ? ", or the part you selected" : ""}.`}
+                </p>
+              )}
+              {chat.turns.map((turn) => (
+                <TurnView
+                  key={turn.id}
+                  turn={turn}
+                  agent={label}
+                  actions={{
+                    onRetry: retry,
+                    onOpenSettings,
+                    onSignIn: signIn,
+                    onAccept: (turn, card) => decide(turn, card, true),
+                    onReject: (turn, card) => decide(turn, card, false),
+                    onAcceptAll: (turn) => decide(turn, null, true),
+                    onRejectAll: (turn) => decide(turn, null, false),
+                    onFocus: focus,
+                    onShow: (turn) => void show(turn),
+                  }}
+                />
+              ))}
+              {agent.error && chat.turns.length === 0 && (
+                <p role="alert" className="text-xs text-amber-400">
+                  {agent.error.message}
+                </p>
+              )}
+            </div>
+
+            <div className="shrink-0 border-t border-zinc-800/80 p-2">
+              {!prepared.ok && (
+                <p role="alert" className="px-1 pb-1.5 text-xs text-amber-400">
+                  {prepared.message}
+                </p>
+              )}
+              <ContextBox
+                files={files}
+                reviewable={!!reviewTarget}
+                onReview={() => reviewTarget && focus(reviewTarget.turn, reviewTarget.card)}
+                notice={cannotSearch}
               />
-              <div className="flex items-center justify-between gap-2 px-2 pb-1.5">
-                {models.length > 0 ? (
-                  <select
-                    value={model ?? ""}
-                    onChange={(event) =>
-                      setModelChoices(
-                        chooseModel(modelChoices, config, vaultPath, event.target.value || null)
-                      )
-                    }
-                    aria-label="Model"
-                    className="min-w-0 max-w-[60%] cursor-pointer truncate bg-transparent text-xs text-gray-500 outline-none hover:text-gray-300"
-                  >
-                    <option value="">Default model</option>
-                    {models.map((offered) => (
-                      <option key={offered.id} value={offered.id}>
-                        {offered.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span />
-                )}
-                <div className="flex items-center gap-2">
-                  {used !== null && <span className="text-[11px] text-gray-600">{used}% context</span>}
-                  <button
-                    type="button"
-                    onClick={chat.running ? chat.stop : () => send(question, intent)}
-                    disabled={!chat.running && !question.trim()}
-                    title={chat.running ? "Stop" : "Send"}
-                    aria-label={chat.running ? "Stop the answer" : "Send"}
-                    className={cn(
-                      "flex size-6 cursor-pointer items-center justify-center rounded-md transition-colors disabled:cursor-default disabled:opacity-40",
-                      chat.running
-                        ? "bg-zinc-700 text-white hover:bg-zinc-600"
-                        : "bg-[var(--nuza-accent)] text-black hover:bg-[var(--nuza-accent-strong)]"
-                    )}
-                  >
-                    {chat.running ? <Square size={10} fill="currentColor" /> : <ArrowUp size={13} />}
-                  </button>
+              <div className="rounded-md border border-zinc-700 bg-zinc-900/70 focus-within:border-[var(--nuza-accent)]">
+                <textarea
+                  ref={composer}
+                  value={question}
+                  rows={2}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={onComposerKey}
+                  onFocus={look}
+                  placeholder={intent === "edit" ? "Describe the change…" : "Ask about this note…"}
+                  aria-label={intent === "edit" ? "The change you want" : "Your question"}
+                  className="block w-full resize-none bg-transparent px-2 pt-2 text-sm text-white outline-none placeholder:text-gray-600"
+                />
+                <div className="flex items-center justify-between gap-2 px-2 pb-1.5">
+                  {models.length > 0 ? (
+                    <select
+                      value={model ?? ""}
+                      onChange={(event) =>
+                        setModelChoices(
+                          chooseModel(modelChoices, config, vaultPath, event.target.value || null)
+                        )
+                      }
+                      aria-label="Model"
+                      className="min-w-0 max-w-[60%] cursor-pointer truncate bg-transparent text-xs text-gray-500 outline-none hover:text-gray-300"
+                    >
+                      <option value="">Default model</option>
+                      {models.map((offered) => (
+                        <option key={offered.id} value={offered.id}>
+                          {offered.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span />
+                  )}
+                  <div className="flex items-center gap-2">
+                    {used !== null && <span className="text-[11px] text-gray-600">{used}% context</span>}
+                    <button
+                      type="button"
+                      onClick={chat.running ? chat.stop : () => send(question, intent)}
+                      disabled={!chat.running && !question.trim()}
+                      title={chat.running ? "Stop" : "Send"}
+                      aria-label={chat.running ? "Stop the answer" : "Send"}
+                      className={cn(
+                        "flex size-6 cursor-pointer items-center justify-center rounded-md transition-colors disabled:cursor-default disabled:opacity-40",
+                        chat.running
+                          ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                          : "bg-[var(--nuza-accent)] text-black hover:bg-[var(--nuza-accent-strong)]"
+                      )}
+                    >
+                      {chat.running ? <Square size={10} fill="currentColor" /> : <ArrowUp size={13} />}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </>
-      )}
-
-      {/* The handle is on the right, against the note; dragging right widens. */}
-      <div
-        onPointerDown={onResizeStart}
-        onDoubleClick={onResizeReset}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the AI panel"
-        title="Drag to resize, double-click to reset"
-        className={cn(
-          "absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize after:absolute after:inset-y-0 after:right-1 after:w-px after:transition-colors",
-          isResizing ? "after:bg-[var(--nuza-accent)]" : "after:bg-transparent hover:after:bg-zinc-500"
+          </>
         )}
-      />
-    </aside>
+
+        {/* The handle is on the right, against the note; dragging right widens. */}
+        <div
+          onPointerDown={onResizeStart}
+          onDoubleClick={onResizeReset}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the AI panel"
+          title="Drag to resize, double-click to reset"
+          className={cn(
+            "absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize after:absolute after:inset-y-0 after:right-1 after:w-px after:transition-colors",
+            isResizing ? "after:bg-[var(--nuza-accent)]" : "after:bg-transparent hover:after:bg-zinc-500"
+          )}
+        />
+      </aside>
+    </CitationContext.Provider>
   );
 });
 

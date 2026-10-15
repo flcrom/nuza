@@ -267,6 +267,7 @@ export default function AiSettings({
     use,
     turnOff,
     setWebLookups,
+    setVaultSearch,
     login,
     listModels,
   } = useAgent();
@@ -352,6 +353,22 @@ export default function AiSettings({
           description="Off sends only the text you select — for help with one sentence of a private note."
         >
           <Switch checked={sendWholeNote} onCheckedChange={setSendWholeNote} />
+        </SettingRow>
+        <SettingRow
+          title="Let the agent search this vault"
+          description={
+            state?.hasVault
+              ? state.agentSearches === false
+                ? "This agent can't use nuza's search tools, so it only sees the note text that is sent."
+                : "It can find and read other notes in this folder with nuza's read-only tools, and cite them."
+              : "Open a folder to choose this for it."
+          }
+        >
+          <Switch
+            checked={state?.vaultSearch ?? false}
+            disabled={!state?.hasVault}
+            onCheckedChange={(allowed) => void setVaultSearch(allowed)}
+          />
         </SettingRow>
         <SettingRow
           title="Look things up on the web"

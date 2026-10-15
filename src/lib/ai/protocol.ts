@@ -57,6 +57,10 @@ export interface AgentState {
   sandboxed: boolean;
   webLookups: boolean;
   hasVault: boolean;
+  /** Whether the agent may search this vault with nuza's read-only tools. */
+  vaultSearch: boolean;
+  /** Whether the running agent can take those tools; null before it has started. */
+  agentSearches: boolean | null;
 }
 
 /** What is installed on this computer. Mirrors `Detection` in agent/status.rs. */

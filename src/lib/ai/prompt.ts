@@ -133,6 +133,17 @@ export function buildFollowUp(input: PromptInput): string {
 }
 
 /**
+ * Phrases from what the harness adds itself, in Rust (`TOOLS_PARAGRAPH` in
+ * agent/harness.rs): taken out of a shown answer the same way. A Rust test
+ * keeps these in step with the text there.
+ */
+export const HARNESS_PHRASES = [
+  "You have tools from a server named `nuza`",
+  "Cite a note you used as a Markdown link with a `nuza:` address",
+  "(The note being asked about is `",
+];
+
+/**
  * Phrases only nuza's own framing uses. An answer that quotes them back - a
  * model reciting its instructions - has those lines taken out before it is
  * shown: the framing is between nuza and the agent, not part of the answer.

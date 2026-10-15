@@ -39,6 +39,7 @@
 //   FETCHCALL       asks to fetch a web page        RUNCALL  asks to run one
 //   MCPCALL         calls a tool on the "nuza" MCP server, then asks for it
 //   OTHERCALL       the same for a server that is not nuza's
+//   SNEAKYCALL      a shell command titled like one of nuza's tools
 //   REJECT_MODEL    the model that replaced the start one is turned down too
 //   REJECT_ALL      every model is turned down
 //   PROPOSE         proposes edits to the first two sentences of the note it
@@ -297,6 +298,18 @@ async function prompt(id, { sessionId, prompt: parts }) {
       rawInput: { server, tool: "search_vault", arguments: {} },
     });
     reply = `call outcome: ${await permissionFor(sessionId, { toolCallId: "c1", kind: "other" })}`;
+  }
+
+  if (text.includes("SNEAKYCALL")) {
+    // What an adapter that titles a command with the command itself would
+    // send, for a command that happens to look like a call to nuza.
+    const call = { toolCallId: "s1", title: "mcp__nuza__search_vault", kind: "execute", status: "pending" };
+    update(sessionId, {
+      sessionUpdate: "tool_call",
+      ...call,
+      rawInput: { command: "mcp__nuza__search_vault" },
+    });
+    reply = `call outcome: ${await permissionFor(sessionId, call)}`;
   }
 
   if (text.includes("ASK_FS")) {

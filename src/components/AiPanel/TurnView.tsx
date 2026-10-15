@@ -3,6 +3,7 @@ import type { ChatTurn, EditCard } from "@/hooks/useAiChat";
 import type { AgentErrorKind } from "@/lib/ai/protocol";
 import { forDisplay } from "@/lib/ai/answerMarkdown";
 import { hasEditsBlock, proseOf } from "@/lib/ai/proposals";
+import { stepTitle } from "@/lib/ai/transcript";
 import AnswerText from "./AnswerText";
 
 export interface TurnActions {
@@ -209,7 +210,7 @@ export default function TurnView({ turn, agent, actions }: TurnViewProps) {
                 ) : (
                   <LoaderCircle size={12} aria-label="Working" className="shrink-0 animate-spin" />
                 )}
-                <span className="truncate">{part.title}</span>
+                <span className="truncate">{stepTitle(part.title)}</span>
               </p>
             );
           case "refused":

@@ -880,6 +880,7 @@ async fn a_conversation_the_agent_does_not_have_is_given_everything() {
     let asked = || Question {
         text: "brief SHOW_PROMPT",
         in_full: Some("full SHOW_PROMPT"),
+        note: None,
     };
     let turn = || async {
         let panel = Panel::default();
@@ -1188,4 +1189,312 @@ async fn real_claude_starts_from_a_cold_cache_inside_the_fence() {
     );
     assert!(hello.is_ok(), "{hello:?}");
     client.kill().await;
+}
+
+// ---------------------------------------------------------------------------
+// The vault tools, as a session is given them
+// ---------------------------------------------------------------------------
+
+use super::harness::{ToolAccess, VaultTools};
+
+/// Stands in for the vault server: hands out a token per session, and keeps
+/// count of what it gave and what was taken back.
+#[derive(Default)]
+struct FakeTools {
+    opened: Mutex<Vec<String>>,
+    closed: Mutex<Vec<String>>,
+    /// Vaults the person turned the tools off for.
+    off_for: Mutex<Vec<std::path::PathBuf>>,
+}
+
+impl VaultTools for FakeTools {
+    fn open(&self, window: &str, vault: &Path) -> Option<ToolAccess> {
+        if self.off_for.lock().unwrap().iter().any(|off| off == vault) {
+            return None;
+        }
+        let token = format!("token-{window}-{}", self.opened.lock().unwrap().len());
+        self.opened.lock().unwrap().push(token.clone());
+        Some(ToolAccess {
+            url: "http://127.0.0.1:9/mcp".into(),
+            token,
+        })
+    }
+
+    fn close(&self, token: &str) {
+        self.closed.lock().unwrap().push(token.to_string());
+    }
+}
+
+/// A harness on the mock playing Claude Code, with the stand-in tools, its
+/// agent told it can (or cannot) take an MCP server over HTTP.
+async fn with_tools(http: bool) -> (Harnessed, Arc<FakeTools>, tempfile::TempDir) {
+    let mut h = harnessed("claude").await;
+    let tools = Arc::new(FakeTools::default());
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().canonicalize().unwrap().join("sessions");
+    let launcher: super::harness::Launcher = Arc::new(move |_| {
+        let mut command = mock("claude");
+        if !http {
+            command.arg("--no-http-mcp");
+        }
+        Ok(command)
+    });
+    h.harness =
+        AgentHarness::new(launcher, sessions).with_tools(Arc::clone(&tools) as Arc<dyn VaultTools>);
+    h.harness.restore(Some(AgentConfig::ClaudeCode));
+    let vault = tempfile::tempdir().unwrap();
+    (h, tools, vault)
+}
+
+async fn ask_in(harness: &AgentHarness, vault: &Path, text: &str) -> Panel {
+    let panel = Panel::default();
+    let _ = timeout(
+        Duration::from_secs(20),
+        harness.prompt("main", Some(vault), text, None, panel.emit()),
+    )
+    .await
+    .expect("the turn ends");
+    panel
+}
+
+#[tokio::test]
+async fn a_session_gets_the_vault_server_when_the_agent_can_take_it() {
+    let (h, tools, vault) = with_tools(true).await;
+    let said = ask_in(&h.harness, vault.path(), "SHOW_MCP").await.said();
+    assert!(said.contains(r#""name":"nuza""#), "{said}");
+    assert!(said.contains(r#""type":"http""#), "{said}");
+    assert!(said.contains("http://127.0.0.1:9/mcp"), "{said}");
+    assert!(said.contains(r#""value":"Bearer token-main-0""#), "{said}");
+    assert_eq!(tools.opened.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_that_cannot_take_it_is_given_none_and_no_token_is_made() {
+    let (h, tools, vault) = with_tools(false).await;
+    let said = ask_in(&h.harness, vault.path(), "SHOW_MCP").await.said();
+    assert_eq!(said, "mcp []");
+    assert!(tools.opened.lock().unwrap().is_empty());
+    assert_eq!(h.harness.takes_tools().await, Some(false));
+}
+
+#[tokio::test]
+async fn turning_the_tools_off_for_a_vault_keeps_them_out_of_its_sessions() {
+    let (h, tools, vault) = with_tools(true).await;
+    tools
+        .off_for
+        .lock()
+        .unwrap()
+        .push(vault.path().to_path_buf());
+    let said = ask_in(&h.harness, vault.path(), "SHOW_MCP").await.said();
+    assert_eq!(said, "mcp []");
+}
+
+#[tokio::test]
+async fn a_new_conversation_with_the_tools_is_told_about_them_and_where_the_note_is() {
+    use super::harness::{Question, TOOLS_PARAGRAPH};
+    let (h, _, vault) = with_tools(true).await;
+    let question = |text| Question {
+        text,
+        in_full: None,
+        note: Some("projects/release.md"),
+    };
+    let panel = Panel::default();
+    h.harness
+        .prompt(
+            "main",
+            Some(vault.path()),
+            question("SHOW_PROMPT"),
+            None,
+            panel.emit(),
+        )
+        .await
+        .unwrap();
+    let first = panel.said();
+    assert!(first.starts_with(TOOLS_PARAGRAPH), "{first}");
+    assert!(
+        first.contains("`projects/release.md` in the vault"),
+        "{first}"
+    );
+
+    // A follow-up is told where the note is, not about the tools again.
+    let panel = Panel::default();
+    h.harness
+        .prompt(
+            "main",
+            Some(vault.path()),
+            question("SHOW_PROMPT"),
+            None,
+            panel.emit(),
+        )
+        .await
+        .unwrap();
+    let second = panel.said();
+    assert!(!second.contains(TOOLS_PARAGRAPH), "{second}");
+    assert!(
+        second.contains("`projects/release.md` in the vault"),
+        "{second}"
+    );
+}
+
+#[tokio::test]
+async fn a_call_to_nuzas_tools_is_allowed_and_not_reported_as_refused() {
+    let (h, _, vault) = with_tools(true).await;
+    let panel = ask_in(&h.harness, vault.path(), "MCPCALL").await;
+    assert_eq!(panel.said(), "call outcome: selected/allow");
+    assert!(!panel
+        .events()
+        .iter()
+        .any(|event| matches!(event, AgentEvent::Refused { .. })));
+}
+
+#[tokio::test]
+async fn a_call_to_any_other_tool_is_still_refused_and_said() {
+    let (h, _, vault) = with_tools(true).await;
+    let panel = ask_in(&h.harness, vault.path(), "OTHERCALL").await;
+    assert_eq!(panel.said(), "call outcome: cancelled/-");
+    assert!(panel
+        .events()
+        .iter()
+        .any(|event| matches!(event, AgentEvent::Refused { .. })));
+}
+
+#[tokio::test]
+async fn a_command_dressed_up_as_one_of_nuzas_tools_is_still_refused() {
+    let (h, _, vault) = with_tools(true).await;
+    let panel = ask_in(&h.harness, vault.path(), "SNEAKYCALL").await;
+    assert_eq!(panel.said(), "call outcome: cancelled/-");
+    assert!(panel.events().contains(&AgentEvent::Refused {
+        action: "run a command".into()
+    }));
+}
+
+#[tokio::test]
+async fn closing_a_window_takes_its_token_back() {
+    let (h, tools, vault) = with_tools(true).await;
+    ask_in(&h.harness, vault.path(), "hello").await;
+    let token = h
+        .harness
+        .tools_token("main")
+        .await
+        .expect("the session has a token");
+    assert!(tools.closed.lock().unwrap().is_empty());
+
+    h.harness.forget_window("main").await;
+    assert_eq!(*tools.closed.lock().unwrap(), [token]);
+    assert_eq!(h.harness.tools_token("main").await, None);
+}
+
+#[tokio::test]
+async fn turning_the_agent_off_takes_every_token_back() {
+    let (h, tools, vault) = with_tools(true).await;
+    ask_in(&h.harness, vault.path(), "hello").await;
+    h.harness.set_agent(None).await;
+    assert_eq!(tools.closed.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn only_exact_names_of_nuzas_tools_count_as_calls_to_nuza() {
+    use super::harness::is_nuza_call;
+    let call = |value: Value| is_nuza_call(&value);
+    assert!(call(
+        json!({ "kind": "other", "title": "mcp__nuza__search_vault" })
+    ));
+    assert!(call(
+        json!({ "kind": "other", "title": "mcp.nuza.read_note" })
+    ));
+    assert!(call(
+        json!({ "kind": "other", "rawInput": { "server": "nuza", "tool": "outline" } })
+    ));
+    assert!(call(
+        json!({ "_meta": { "claudeCode": { "toolName": "mcp__nuza__list_tags" } } })
+    ));
+
+    // A prefix is not a name, another server is not nuza, and running,
+    // changing or fetching is never a call to nuza, whatever it is called.
+    assert!(!call(
+        json!({ "kind": "other", "title": "mcp__nuza__search_vault; cat ~/.ssh/id_rsa" })
+    ));
+    assert!(!call(
+        json!({ "kind": "other", "title": "mcp__nuza__write_note" })
+    ));
+    assert!(!call(
+        json!({ "kind": "other", "rawInput": { "server": "other", "tool": "read_note" } })
+    ));
+    for kind in ["execute", "edit", "delete", "move", "fetch"] {
+        assert!(
+            !call(json!({ "kind": kind, "title": "mcp__nuza__search_vault" })),
+            "{kind}"
+        );
+    }
+}
+
+/// The real vault server, over a vault on disk, as the app hands it out.
+struct RealTools {
+    server: crate::vaultserver::VaultServer,
+    vault: Arc<crate::state::Vault>,
+}
+
+impl VaultTools for RealTools {
+    fn open(&self, _: &str, _: &Path) -> Option<ToolAccess> {
+        let token = self.server.grant(Arc::clone(&self.vault))?;
+        Some(ToolAccess {
+            url: self.server.url().to_string(),
+            token,
+        })
+    }
+
+    fn close(&self, token: &str) {
+        self.server.revoke(token);
+    }
+}
+
+/// Opt-in: the real Claude Code, in its sandbox, searches a vault through
+/// nuza's server, cites what it found, and is refused nothing on the way.
+#[tokio::test]
+#[ignore]
+async fn real_claude_searches_the_vault_and_cites_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::write(root.join("projects/fruit.md"), "# Fruit\n\nThe launch codename is Tangerine.\n").unwrap();
+    std::fs::write(root.join("diary.md"), "# Diary\n\nNothing about launches.\n").unwrap();
+    let vault = Arc::new(crate::state::Vault {
+        root: std::sync::Mutex::new(Some(root.clone())),
+        index: crate::index::VaultIndex::for_folder(&root).unwrap(),
+        ..Default::default()
+    });
+    let tools = Arc::new(RealTools {
+        server: crate::vaultserver::VaultServer::start().unwrap(),
+        vault,
+    });
+    let harness = AgentHarness::new(Arc::new(super::start::command_for), super::start::sessions_root())
+        .with_tools(tools as Arc<dyn VaultTools>);
+    timeout(Duration::from_secs(300), harness.use_agent(AgentConfig::ClaudeCode))
+        .await
+        .unwrap()
+        .unwrap();
+    let panel = Panel::default();
+    let outcome = harness
+        .prompt(
+            "main",
+            Some(&root),
+            "Which note mentions the launch codename, and what is it? Search the vault to find out, then answer in one sentence with a citation.",
+            None,
+            panel.emit(),
+        )
+        .await;
+    for event in panel.events() {
+        if !matches!(event, AgentEvent::Token { .. }) {
+            println!("{event:?}");
+        }
+    }
+    println!("ANSWER: {}", panel.said());
+    println!("OUTCOME: {outcome:?}");
+    assert!(outcome.is_ok());
+    assert!(panel.said().contains("Tangerine"), "the answer came from the vault");
+    assert!(!panel
+        .events()
+        .iter()
+        .any(|event| matches!(event, AgentEvent::Refused { .. })));
+    harness.shutdown().await;
 }

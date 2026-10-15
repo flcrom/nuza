@@ -78,6 +78,22 @@ export function applyEvent(answer: Answer, event: AgentEvent): Answer {
   }
 }
 
+const TOOL_STEPS: Record<string, string> = {
+  search_vault: "Searched the vault",
+  read_note: "Read a note",
+  list_notes: "Looked through the notes",
+  outline: "Read a note's headings",
+  backlinks: "Found what links to a note",
+  list_tags: "Looked at the tags",
+  notes_with_tag: "Found notes with a tag",
+};
+
+/** A step's title in words: a call to one of nuza's tools reads as what it did. */
+export function stepTitle(title: string): string {
+  const tool = /^mcp(?:__|\.)nuza(?:__|\.)(\w+)$/.exec(title.trim())?.[1];
+  return (tool && TOOL_STEPS[tool]) || title;
+}
+
 /** The words of an answer, without its thoughts, steps or notes. */
 export function answerText(answer: Answer): string {
   return answer.parts
