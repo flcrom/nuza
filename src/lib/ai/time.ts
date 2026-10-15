@@ -17,3 +17,12 @@ export function tookFor(milliseconds: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${seconds % 60}s`;
 }
+
+/** Which day a time falls on, for grouping a list: "Today", "Yesterday" or "Earlier". */
+export function dayFor(then: number, now = Date.now()): "Today" | "Yesterday" | "Earlier" {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  if (then >= midnight.getTime()) return "Today";
+  midnight.setDate(midnight.getDate() - 1);
+  return then >= midnight.getTime() ? "Yesterday" : "Earlier";
+}

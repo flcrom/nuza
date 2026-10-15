@@ -19,7 +19,7 @@ import {
   type SavedTurn,
   type Thread,
 } from "../src/lib/ai/memory";
-import { agoFor, tookFor } from "../src/lib/ai/time";
+import { agoFor, dayFor, tookFor } from "../src/lib/ai/time";
 
 // The webview's storage, as the tests' own: kept in a map.
 const kept = new Map<string, string>();
@@ -211,5 +211,14 @@ describe("times, as a person says them", () => {
     expect(tookFor(400)).toBe("1s");
     expect(tookFor(12_400)).toBe("12s");
     expect(tookFor(75_000)).toBe("1m 15s");
+  });
+});
+
+describe("the day a chat falls on", () => {
+  test("is today, yesterday or earlier, by the calendar rather than by 24 hours", () => {
+    const now = new Date(2026, 9, 15, 0, 30).getTime();
+    expect(dayFor(now - 10 * 60_000, now)).toBe("Today");
+    expect(dayFor(now - 60 * 60_000, now)).toBe("Yesterday");
+    expect(dayFor(now - 2 * 86_400_000, now)).toBe("Earlier");
   });
 });

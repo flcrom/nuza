@@ -315,6 +315,38 @@ describe("the list of chats", () => {
     );
     expect(markup).toContain("No earlier chats in this folder.");
   });
+
+  test("groups them by day, marks the open one and names the note each was about", () => {
+    const about = { title: "weblog.md", lines: null };
+    const said = { request: "", text: "", action: "Synonym", about, answer: "", failed: null, took: null };
+    const markup = renderToStaticMarkup(
+      <ThreadList
+        threads={[threads[0]!, { ...threads[1]!, turns: [said, said] }]}
+        current="a"
+        onOpen={() => {}}
+        onDelete={() => {}}
+        onClose={() => {}}
+        onNew={() => {}}
+      />
+    );
+    expect(markup).toContain("Today");
+    expect(markup).toContain("Earlier");
+    expect(markup).toContain('aria-current="true"');
+    expect(markup).toMatch(/>Synonym<\/span>/);
+    expect(markup).toContain("weblog.md");
+    expect(markup).toContain("2 messages");
+    expect(markup).toContain("New chat");
+    expect(markup).not.toContain("Search chats");
+  });
+
+  test("offers a search once there are many", () => {
+    const many = Array.from({ length: 8 }, (_, at) => ({ ...threads[0]!, id: String(at) }));
+    const markup = renderToStaticMarkup(
+      <ThreadList threads={many} current="0" onOpen={() => {}} onDelete={() => {}} onClose={() => {}} />
+    );
+    expect(markup).toContain("Search chats");
+    expect(markup).not.toContain("New chat");
+  });
 });
 
 describe("a new note the agent suggested", () => {
