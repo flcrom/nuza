@@ -217,7 +217,8 @@ impl VaultIndex {
 
         // A folder that cannot be read leaves an index with nothing in it, and
         // that is the right answer for it.
-        let tree = read_dir_recursive(&display_root).unwrap_or_default();
+        let tree =
+            crate::slow::in_background(|| read_dir_recursive(&display_root)).unwrap_or_default();
 
         let pending = {
             let mut inner = lock(&self.inner);
@@ -404,7 +405,7 @@ impl VaultIndex {
                 Box::new(move || read_note(&path)) as Box<dyn FnOnce() -> Option<Arc<str>> + Send>
             })
             .collect();
-        let mut read = run_all(jobs, READ_PATIENCE);
+        let mut read = crate::slow::in_background(|| run_all(jobs, READ_PATIENCE));
 
         let mut wanted = wanted;
         for (position, text) in reads.into_iter().zip(read.drain(..)) {

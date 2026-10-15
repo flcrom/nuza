@@ -13,7 +13,7 @@ import { hasUnavailable, parentOf } from "@/lib/fileTree";
 import { samePath } from "@/lib/path";
 import { FileIcon } from "@/lib/utils";
 import { FileEntry } from "@/lib/types";
-import { useTreeContext } from "./TreeContext";
+import { useTreeContext, useTreeMark } from "./TreeContext";
 import InlineInput from "./InlineInput";
 
 export function NewEntryRow({
@@ -54,12 +54,8 @@ export function NewEntryRow({
 function FileTreeNode({ entry }: { entry: FileEntry }) {
   const {
     onFileSelect,
-    currentFile,
-    selectedPath,
-    renamingPath,
     submitRename,
     cancelRename,
-    pendingCreate,
     submitCreate,
     cancelCreate,
     openContextMenu,
@@ -82,10 +78,16 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
    * folder that did not answer is asked again the next time it is opened.
    */
   const [reading, setReading] = useState<"idle" | "loading" | "failed">("idle");
-  const isRenaming = renamingPath === entry.path;
+  const isRenaming = useTreeMark((marks) => marks.renamingPath === entry.path);
+  const isCurrent = useTreeMark((marks) => marks.currentFile === entry.path);
+  const isSelected = useTreeMark((marks) => marks.selectedPath === entry.path);
+  /** What is being named inside this folder, if anything is. */
+  const creating = useTreeMark((marks) =>
+    marks.pendingCreate?.parentPath === entry.path ? marks.pendingCreate.type : null
+  );
   const isDraggedOver = useIsDragOver(entry.path);
   const isBeingDragged = useIsDragged(entry.path);
-  const showCreateRow = entry.isDirectory && pendingCreate?.parentPath === entry.path;
+  const showCreateRow = entry.isDirectory && creating !== null;
 
   // Auto-expand a folder when the user asks to create something inside it,
   // so the inline input row is actually visible.
@@ -210,9 +212,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
             }}
             className={`flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors compact:py-0.5 hover:bg-zinc-800/25 hover:text-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] [&::-webkit-details-marker]:hidden ${
               // Selected, so where the header's New File and New Folder go.
-              selectedPath === entry.path
-                ? "bg-white/5 text-zinc-100 group-focus-within/tree:bg-white/10"
-                : ""
+              isSelected ? "bg-white/5 text-zinc-100 group-focus-within/tree:bg-white/10" : ""
             } ${isDraggedOver ? "bg-zinc-700/50 outline outline-1 outline-zinc-500" : ""} ${isBeingDragged ? "opacity-40" : ""}`}
           >
             <ChevronRight className="cm-tree-chevron h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform" />
@@ -235,7 +235,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
 
           <ul className="ml-5 cursor-pointer border-l border-zinc-700 pl-3">
             {showCreateRow && (
-              <NewEntryRow type={pendingCreate!.type} onSubmit={submitCreate} onCancel={cancelCreate} />
+              <NewEntryRow type={creating!} onSubmit={submitCreate} onCancel={cancelCreate} />
             )}
             {contentsShown &&
               entry.children?.map((child) => <MemoisedFileTreeNode key={child.path} entry={child} />)}
@@ -277,7 +277,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
           openContextMenu(e, entry);
         }}
         className={`flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1.5 pl-7 pr-2 text-left text-sm transition-colors compact:py-0.5 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] ${
-          currentFile === entry.path
+          isCurrent
             ? // The note the editor is actually showing. It lifts when the
               // panel has the keyboard and settles back when the editor takes
               // it, which is the only thing either pane does to say which one

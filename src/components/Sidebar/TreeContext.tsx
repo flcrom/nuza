@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 import { FileEntry } from "@/lib/types";
 
 export type PendingCreate = { parentPath: string; type: "file" | "folder" } | null;
@@ -18,13 +18,10 @@ export type ContextMenuState = {
  */
 export interface TreeActions {
   onFileSelect?: (path: string) => void;
-  currentFile: string;
-  /** The row selected in the tree: where the header's New File and New Folder put things. */
-  selectedPath: string | null;
-  renamingPath: string | null;
+  /** Which rows are open, selected, being renamed or being made into: see `TreeMarks`. */
+  marks: TreeMarkStore;
   submitRename: (path: string, newName: string) => void;
   cancelRename: () => void;
-  pendingCreate: PendingCreate;
   submitCreate: (name: string) => void;
   cancelCreate: () => void;
   openContextMenu: (e: React.MouseEvent, entry: FileEntry | null) => void;
@@ -44,4 +41,60 @@ export function useTreeContext() {
   const ctx = useContext(TreeContext);
   if (!ctx) throw new Error("useTreeContext must be used within a TreeContext.Provider");
   return ctx;
+}
+
+/**
+ * What sets one row apart from the rest: the note open in the editor, the
+ * row selected, the one being renamed, the folder a new entry is being named
+ * in. Each changes for one or two rows at a time, and opening another note
+ * changes the first on every tab switch - so it is kept outside the context,
+ * and each row asks only whether it is the one. Through the context, every
+ * row drawn in the vault was drawn again for each note opened: over a
+ * thousand of them with the folders open.
+ */
+export interface TreeMarks {
+  currentFile: string;
+  /** The row selected in the tree: where the header's New File and New Folder put things. */
+  selectedPath: string | null;
+  renamingPath: string | null;
+  pendingCreate: PendingCreate;
+}
+
+export interface TreeMarkStore {
+  get: () => TreeMarks;
+  set: (marks: TreeMarks) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+export function createTreeMarks(marks: TreeMarks): TreeMarkStore {
+  let current = marks;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => current,
+    set(next) {
+      if (
+        next.currentFile === current.currentFile &&
+        next.selectedPath === current.selectedPath &&
+        next.renamingPath === current.renamingPath &&
+        next.pendingCreate === current.pendingCreate
+      )
+        return;
+      current = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+/**
+ * One row's answer from the marks. `read` must return something compared by
+ * value - a flag, a name - so a row is drawn again only when its own answer
+ * changes, however often the marks do.
+ */
+export function useTreeMark<T>(read: (marks: TreeMarks) => T): T {
+  const { marks } = useTreeContext();
+  return useSyncExternalStore(marks.subscribe, () => read(marks.get()));
 }

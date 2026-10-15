@@ -111,25 +111,46 @@ export function resolveEmbed(target: string, files: readonly string[], root: str
   const wanted = target.trim().replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
   if (!wanted) return null;
 
-  const relative = (file: string) =>
-    (file.startsWith(root) ? file.slice(root.length) : file)
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "")
-      .toLowerCase();
-
-  const byPath = wanted.includes("/");
-  const matches = files.filter((file) => {
-    const path = relative(file);
-    return byPath ? path === wanted : path.slice(path.lastIndexOf("/") + 1) === wanted;
-  });
+  // Looked up rather than searched for: an embed is resolved each time the
+  // note around it is drawn, and every file in the vault was gone through for
+  // each one.
+  const index = embedIndexFor(files, root);
+  const matches = (wanted.includes("/") ? index.byPath : index.byName).get(wanted) ?? [];
   if (matches.length <= 1) return matches[0] ?? null;
 
-  const depth = (file: string) => relative(file).split("/").length;
+  const depth = (file: string) => embedComparable(file, root).split("/").length;
   return matches.slice().sort((a, b) => {
     const besideA = folderOf(a) === fromDirectory ? 0 : 1;
     const besideB = folderOf(b) === fromDirectory ? 0 : 1;
     return besideA - besideB || depth(a) - depth(b) || a.localeCompare(b);
   })[0];
+}
+
+/** A file's path from the vault's root, forward slashes and lower case - extension and all. */
+function embedComparable(file: string, root: string) {
+  return (file.startsWith(root) ? file.slice(root.length) : file)
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .toLowerCase();
+}
+
+/** One index of the vault's files per list of them, as `indexFor` keeps for notes. */
+const embedIndexes = new WeakMap<readonly string[], NoteIndex>();
+
+function embedIndexFor(files: readonly string[], root: string): NoteIndex {
+  const kept = embedIndexes.get(files);
+  if (kept && kept.root === root) return kept;
+  const byPath = new Map<string, string[]>();
+  const byName = new Map<string, string[]>();
+  for (const file of files) {
+    const path = embedComparable(file, root);
+    (byPath.get(path) ?? byPath.set(path, []).get(path)!).push(file);
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    (byName.get(name) ?? byName.set(name, []).get(name)!).push(file);
+  }
+  const index = { byPath, byName, root };
+  embedIndexes.set(files, index);
+  return index;
 }
 
 /** What is between the brackets: the note named, the label shown, and any heading. */
@@ -166,17 +187,57 @@ function folderOf(path: string) {
  * linking note wins, then the one nearest the root, then the first by path.
  */
 export function resolveWikiLink(target: string, notes: string[], root: string, fromDirectory: string) {
+  return resolveIn(indexFor(notes, root), target, fromDirectory);
+}
+
+/**
+ * The vault's notes by what a link can call them: their path from the root
+ * and their name, each as `comparable` has it, in the order `notes` lists
+ * them. Looking a link up in it is one step however big the vault is - where
+ * going through every note for every link made the backlinks of a vault of
+ * a few hundred notes take most of a frame to work out on each note opened.
+ */
+interface NoteIndex {
+  byPath: Map<string, string[]>;
+  byName: Map<string, string[]>;
+  root: string;
+}
+
+function buildIndex(notes: string[], root: string): NoteIndex {
+  const byPath = new Map<string, string[]>();
+  const byName = new Map<string, string[]>();
+  const add = (map: Map<string, string[]>, key: string, note: string) => {
+    const had = map.get(key);
+    if (had) had.push(note);
+    else map.set(key, [note]);
+  };
+  for (const note of notes) {
+    const path = comparable(note, root);
+    add(byPath, path, note);
+    add(byName, path.slice(path.lastIndexOf("/") + 1), note);
+  }
+  return { byPath, byName, root };
+}
+
+/** One index per list of notes, kept for as long as the list is. */
+const indexes = new WeakMap<string[], NoteIndex>();
+
+function indexFor(notes: string[], root: string): NoteIndex {
+  const kept = indexes.get(notes);
+  if (kept && kept.root === root) return kept;
+  const index = buildIndex(notes, root);
+  indexes.set(notes, index);
+  return index;
+}
+
+function resolveIn(index: NoteIndex, target: string, fromDirectory: string) {
   const wanted = target.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\.md$/i, "").toLowerCase();
   if (!wanted) return null;
 
-  const byPath = wanted.includes("/");
-  const matches = notes.filter((note) => {
-    const path = comparable(note, root);
-    return byPath ? path === wanted : path.slice(path.lastIndexOf("/") + 1) === wanted;
-  });
+  const matches = (wanted.includes("/") ? index.byPath : index.byName).get(wanted) ?? [];
   if (matches.length <= 1) return matches[0] ?? null;
 
-  const depth = (note: string) => comparable(note, root).split("/").length;
+  const depth = (note: string) => comparable(note, index.root).split("/").length;
   return matches.slice().sort((a, b) => {
     const besideA = folderOf(a) === fromDirectory ? 0 : 1;
     const besideB = folderOf(b) === fromDirectory ? 0 : 1;
@@ -220,13 +281,26 @@ export interface WikiLinkRef {
  * note's links to itself are left out. In path and then line order.
  */
 export function backlinksTo(path: string, links: WikiLinkRef[], notes: string[], root: string) {
-  return links
-    .filter((link) => {
-      if (link.from === path) return false;
-      const { target } = readWikiLink(link.target);
-      return resolveWikiLink(target, notes, root, folderOf(link.from)) === path;
-    })
-    .sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line);
+  return backlinkIndex(links, notes, root).get(path) ?? [];
+}
+
+/**
+ * Every note's backlinks at once, by the note they lead to: each link is
+ * resolved once, rather than every link again for each note that is opened.
+ */
+export function backlinkIndex(links: WikiLinkRef[], notes: string[], root: string) {
+  const index = indexFor(notes, root);
+  const byTarget = new Map<string, WikiLinkRef[]>();
+  for (const link of links) {
+    const resolved = resolveIn(index, readWikiLink(link.target).target, folderOf(link.from));
+    if (!resolved || resolved === link.from) continue;
+    const had = byTarget.get(resolved);
+    if (had) had.push(link);
+    else byTarget.set(resolved, [link]);
+  }
+  for (const found of byTarget.values())
+    found.sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line);
+  return byTarget;
 }
 
 /**

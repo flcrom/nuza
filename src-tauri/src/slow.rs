@@ -11,9 +11,11 @@
 //! it: the row it was for is shown as unavailable, and the rest of the folder
 //! is not held up.
 
+use std::cell::Cell;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Threads the pool keeps. Enough that a few stuck calls leave the rest
@@ -37,9 +39,21 @@ struct Task {
     started: Arc<AtomicUsize>,
 }
 
+/// What is waiting for a thread, in two lanes. Whatever someone is waiting on
+/// right now - a folder being opened, a rename being taken account of - goes
+/// before the reads a vault-wide scan queues up by the thousand: in one lane,
+/// a single `stat` for a rename waited behind every note in the vault, three
+/// seconds in a large one, and was then given up on.
+#[derive(Default)]
+struct Queues {
+    urgent: VecDeque<Task>,
+    background: VecDeque<Task>,
+}
+
 struct Pool {
-    queue: mpsc::Sender<Task>,
-    tasks: Mutex<mpsc::Receiver<Task>>,
+    queues: Mutex<Queues>,
+    /// Signalled whenever a task is queued.
+    queued: Condvar,
     /// Threads alive now, including any busy with a call that never returned.
     live: AtomicUsize,
     /// Threads with nothing to do. When there are none, a request would wait
@@ -51,14 +65,11 @@ fn pool() -> &'static Pool {
     static POOL: OnceLock<Pool> = OnceLock::new();
     static STARTED: OnceLock<()> = OnceLock::new();
 
-    let pool = POOL.get_or_init(|| {
-        let (queue, tasks) = mpsc::channel();
-        Pool {
-            queue,
-            tasks: Mutex::new(tasks),
-            live: AtomicUsize::new(0),
-            idle: AtomicUsize::new(0),
-        }
+    let pool = POOL.get_or_init(|| Pool {
+        queues: Mutex::new(Queues::default()),
+        queued: Condvar::new(),
+        live: AtomicUsize::new(0),
+        idle: AtomicUsize::new(0),
     });
     STARTED.get_or_init(|| grow(pool, WORKERS));
     pool
@@ -90,11 +101,19 @@ fn work(pool: &'static Pool) {
     loop {
         pool.idle.fetch_add(1, Ordering::SeqCst);
         let task = {
-            let tasks = pool.tasks.lock().unwrap_or_else(|p| p.into_inner());
-            tasks.recv()
+            let mut queues = pool.queues.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                if let Some(task) = queues
+                    .urgent
+                    .pop_front()
+                    .or_else(|| queues.background.pop_front())
+                {
+                    break task;
+                }
+                queues = pool.queued.wait(queues).unwrap_or_else(|p| p.into_inner());
+            }
         };
         pool.idle.fetch_sub(1, Ordering::SeqCst);
-        let Ok(task) = task else { return };
 
         if !task.abandoned.load(Ordering::SeqCst) {
             task.started.fetch_add(1, Ordering::SeqCst);
@@ -114,6 +133,24 @@ fn work(pool: &'static Pool) {
             return;
         }
     }
+}
+
+thread_local! {
+    /// Set while this thread is doing work nobody is waiting on.
+    static BACKGROUND: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `work` with whatever it puts on the pool in the background lane:
+/// served only when nothing in the other lane is waiting.
+pub(crate) fn in_background<T>(work: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BACKGROUND.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(BACKGROUND.with(|flag| flag.replace(true)));
+    work()
 }
 
 /// Runs every job on the pool and waits for them all - but only until `within`
@@ -138,19 +175,26 @@ pub(crate) fn run_all<T: Send + 'static>(
     let started = Arc::new(AtomicUsize::new(0));
     let (reply, replies) = mpsc::channel();
 
-    for (index, job) in jobs.into_iter().enumerate() {
-        let reply = reply.clone();
-        let task = Task {
-            run: Box::new(move || {
-                let _ = reply.send((index, job()));
-            }),
-            abandoned: abandoned.clone(),
-            started: started.clone(),
+    {
+        let background = BACKGROUND.with(Cell::get);
+        let mut queues = pool.queues.lock().unwrap_or_else(|p| p.into_inner());
+        let lane = if background {
+            &mut queues.background
+        } else {
+            &mut queues.urgent
         };
-        if pool.queue.send(task).is_err() {
-            break;
+        for (index, job) in jobs.into_iter().enumerate() {
+            let reply = reply.clone();
+            lane.push_back(Task {
+                run: Box::new(move || {
+                    let _ = reply.send((index, job()));
+                }),
+                abandoned: abandoned.clone(),
+                started: started.clone(),
+            });
         }
     }
+    pool.queued.notify_all();
     drop(reply);
 
     // Every thread is busy, which may be with calls that will never return:

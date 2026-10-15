@@ -89,6 +89,9 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            files::warm_trash();
+
             // Empty until a folder is opened, which is also what makes every
             // filesystem command refuse until then.
             app.manage(state::Windows::default());

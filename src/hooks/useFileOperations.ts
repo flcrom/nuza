@@ -1593,8 +1593,18 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
   const deleteEntry = useCallback(
     async (path: string) => {
-      await invoke("delete_entry", { path });
-      setFolderData((tree) => removeEntry(tree, rootPathRef.current ?? "", path));
+      // Gone from the tree as soon as it is asked for, and put back if the
+      // Trash would not take it: the move itself can take a moment, and a row
+      // still sitting there after Delete reads as the click not landing.
+      const root = rootPathRef.current ?? "";
+      const gone = findEntry(folderDataRef.current, path);
+      setFolderData((tree) => removeEntry(tree, root, path));
+      try {
+        await invoke("delete_entry", { path });
+      } catch (error) {
+        if (gone) setFolderData((tree) => (findEntry(tree, path) ? tree : addEntry(tree, root, gone)));
+        throw error;
+      }
 
       forgetDocuments((open) => isWithin(open, path));
       setSideFile((side) => (side && isWithin(side, path) ? null : side));
