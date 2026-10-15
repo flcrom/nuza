@@ -176,25 +176,54 @@ fn is_executable(_: &std::fs::Metadata) -> bool {
 }
 
 /// The files `path` may mean. On Windows a program is typed without its
-/// extension (`npx` is `npx.cmd`), so `PATHEXT`'s are tried too.
+/// extension (`npx` is `npx.cmd`), and only a file with one of `PATHEXT`'s
+/// extensions is a program at all: npm puts an extensionless shell script
+/// for Unix beside each `.cmd`, and Windows cannot run it.
 fn candidates(path: &Path) -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        let mut all = vec![path.to_path_buf()];
-        if path.extension().is_none() {
-            let extensions =
-                std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-            for extension in extensions.split(';').filter(|e| !e.is_empty()) {
-                let mut name = path.as_os_str().to_os_string();
-                name.push(extension);
-                all.push(PathBuf::from(name));
-            }
-        }
-        all
+        let extensions =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        windows_candidates(path, &extensions)
     }
     #[cfg(not(windows))]
     {
         vec![path.to_path_buf()]
+    }
+}
+
+/// What `path` may mean on Windows, given `PATHEXT`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_candidates(path: &Path, pathext: &str) -> Vec<PathBuf> {
+    let extensions: Vec<&str> = pathext.split(';').filter(|e| !e.is_empty()).collect();
+    match path.extension() {
+        Some(extension) => {
+            let dotted = format!(".{}", extension.to_string_lossy());
+            if extensions
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&dotted))
+            {
+                vec![path.to_path_buf()]
+            } else {
+                // `my.agent` may still be `my.agent.cmd`.
+                extensions
+                    .iter()
+                    .map(|known| {
+                        let mut name = path.as_os_str().to_os_string();
+                        name.push(known);
+                        PathBuf::from(name)
+                    })
+                    .collect()
+            }
+        }
+        None => extensions
+            .iter()
+            .map(|known| {
+                let mut name = path.as_os_str().to_os_string();
+                name.push(known);
+                PathBuf::from(name)
+            })
+            .collect(),
     }
 }
 
@@ -234,6 +263,43 @@ mod tests {
         assert_eq!(resolve_command("my-agent", OsStr::new("/usr/bin")), None);
         // A relative entry in PATH is not somewhere to look.
         assert_eq!(resolve_command("my-agent", OsStr::new(".")), None);
+    }
+
+    #[test]
+    fn on_windows_only_a_file_with_a_program_extension_is_a_program() {
+        let pathext = ".COM;.EXE;.BAT;.CMD";
+        let npx = Path::new(r"C:\npm\npx");
+        // npm's extensionless script for Unix is never one of them.
+        assert_eq!(
+            windows_candidates(npx, pathext),
+            [
+                PathBuf::from(r"C:\npm\npx.COM"),
+                PathBuf::from(r"C:\npm\npx.EXE"),
+                PathBuf::from(r"C:\npm\npx.BAT"),
+                PathBuf::from(r"C:\npm\npx.CMD"),
+            ]
+        );
+        assert_eq!(
+            windows_candidates(Path::new(r"C:\npm\npx.cmd"), pathext),
+            [PathBuf::from(r"C:\npm\npx.cmd")]
+        );
+        assert_eq!(
+            windows_candidates(Path::new(r"C:\bin\agent.js"), pathext).len(),
+            4
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn npms_script_for_unix_is_passed_over_for_its_cmd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("npx"), "#!/bin/sh\n").unwrap();
+        std::fs::write(dir.path().join("npx.cmd"), "@echo off\r\n").unwrap();
+        let found = resolve_command("npx", dir.path().as_os_str()).unwrap();
+        assert!(found
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("npx.cmd"));
     }
 
     #[cfg(windows)]

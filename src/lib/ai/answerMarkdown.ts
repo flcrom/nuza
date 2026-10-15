@@ -21,8 +21,28 @@ const NOTE_TAG = /<\/?note id="[^"\n]*">/g;
  * selection marks, or any line that recites nuza's own framing. What the
  * agent was told stays between nuza and the agent.
  */
+/**
+ * An answer without the reasoning some models write into it, marked with
+ * think tags: a whole `<think>...</think>`, everything before a closing tag
+ * that was never opened (the model began by thinking), and an opened one
+ * still streaming.
+ */
+export function withoutThinking(answer: string): string {
+  let text = answer.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const close = text.toLowerCase().lastIndexOf("</think>");
+  if (close !== -1) text = text.slice(close + "</think>".length);
+  const open = text.toLowerCase().indexOf("<think>");
+  if (open !== -1) text = text.slice(0, open);
+  return text.replace(/^\s+/, "");
+}
+
 export function forDisplay(answer: string): string {
-  const cleaned = answer.replace(NOTE_TAG, "").split(SELECTION_START).join("").split(SELECTION_END).join("");
+  const cleaned = withoutThinking(answer)
+    .replace(NOTE_TAG, "")
+    .split(SELECTION_START)
+    .join("")
+    .split(SELECTION_END)
+    .join("");
   return cleaned
     .split("\n")
     .filter((line) => ![...FRAMING_PHRASES, ...HARNESS_PHRASES].some((phrase) => line.includes(phrase)))
