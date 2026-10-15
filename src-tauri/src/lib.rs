@@ -18,6 +18,7 @@ mod state;
 mod tags;
 mod tasks;
 mod tree;
+mod vaultserver;
 mod watcher;
 mod wiki;
 mod window;
@@ -95,10 +96,14 @@ pub fn run() {
             // The agent, if one has been turned on - not started, only known
             // about: it starts when it is first needed.
             let decisions = agent::store::Store::open(app.path().app_data_dir().ok().as_deref());
-            let harness = Arc::new(agent::AgentHarness::new(
-                Arc::new(agent::start::command_for),
-                agent::start::sessions_root(),
-            ));
+            let tools = Arc::new(agent::tools::AppVaultTools::new(app.handle().clone()));
+            let harness = Arc::new(
+                agent::AgentHarness::new(
+                    Arc::new(agent::start::command_for),
+                    agent::start::sessions_root(),
+                )
+                .with_tools(Arc::clone(&tools) as Arc<dyn agent::VaultTools>),
+            );
             let kept = decisions.get();
             harness.restore(kept.agent);
             for vault in &kept.web_vaults {
@@ -106,6 +111,7 @@ pub fn run() {
             }
             app.manage(decisions);
             app.manage(harness);
+            app.manage(tools);
 
             // What `nuza <path>` started this run on, if it did. Read here, not
             // by the window, so it does not depend on who asks first.
@@ -212,7 +218,10 @@ pub fn run() {
             agent::commands::agent_cancel,
             agent::commands::agent_new_chat,
             agent::commands::agent_login,
-            agent::commands::agent_set_web_lookups
+            agent::commands::agent_set_web_lookups,
+            agent::commands::agent_set_vault_search,
+            agent::commands::agent_citable,
+            agent::commands::agent_cite
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

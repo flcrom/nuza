@@ -19,8 +19,9 @@ mod sandbox;
 pub(crate) mod start;
 mod status;
 pub(crate) mod store;
+pub(crate) mod tools;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use harness::AgentHarness;
+pub(crate) use harness::{AgentHarness, VaultTools};

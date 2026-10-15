@@ -95,6 +95,19 @@ export function useAgent() {
     }
   }, []);
 
+  /** Lets the agent search this window's vault with nuza's read-only tools, or stops it. */
+  const setVaultSearch = useCallback(
+    async (allowed: boolean) => {
+      try {
+        await invoke("agent_set_vault_search", { allowed });
+      } catch (error) {
+        report("Couldn't change vault search", error);
+      }
+      await refresh();
+    },
+    [refresh]
+  );
+
   const setWebLookups = useCallback(
     async (allowed: boolean) => {
       try {
@@ -139,6 +152,7 @@ export function useAgent() {
     turnOff,
     warm,
     setWebLookups,
+    setVaultSearch,
     login,
     listModels,
   };

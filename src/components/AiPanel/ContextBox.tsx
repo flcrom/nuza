@@ -19,6 +19,8 @@ interface ContextBoxProps {
   /** Whether there are edits waiting to be looked at. */
   reviewable: boolean;
   onReview: () => void;
+  /** Something to say about what the agent can see, once. */
+  notice?: string | null;
 }
 
 function FileRow({ file }: { file: ContextFile }) {
@@ -53,7 +55,7 @@ function FileRow({ file }: { file: ContextFile }) {
  * the note, what of it goes, and how much the edits waiting over it change.
  * A row opens to the note's text exactly as it is sent.
  */
-export default function ContextBox({ files, reviewable, onReview }: ContextBoxProps) {
+export default function ContextBox({ files, reviewable, onReview, notice }: ContextBoxProps) {
   const [open, setOpen] = useState(true);
   if (!files.length) return null;
   return (
@@ -78,6 +80,7 @@ export default function ContextBox({ files, reviewable, onReview }: ContextBoxPr
           </button>
         )}
       </div>
+      {open && notice && <p className="px-2 pb-1 text-[11px] text-gray-500">{notice}</p>}
       {open && (
         <ul className="px-0.5 pb-1">
           {files.map((file) => (

@@ -588,6 +588,7 @@ function App() {
     [currentFile, editorView, sideFile, sideView]
   );
   const openForAi = useCallback((path: string) => selectFile(path), [selectFile]);
+  const openAiCitation = useCallback((path: string, line: number) => void openAt(path, line, 1), [openAt]);
 
   /** The note the AI panel is asking about, as its editor has it right now - unsaved edits and all. */
   const readAiNote = useCallback((): NoteSnapshot | null => {
@@ -949,6 +950,7 @@ function App() {
               readNote={readAiNote}
               viewFor={aiViewFor}
               openNote={openForAi}
+              openAt={openAiCitation}
               sendWholeNote={aiSendWholeNote}
               vaultPath={rootPath}
               modelChoices={aiModelChoices}

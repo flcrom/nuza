@@ -39,6 +39,7 @@
 //   FETCHCALL       asks to fetch a web page        RUNCALL  asks to run one
 //   MCPCALL         calls a tool on the "nuza" MCP server, then asks for it
 //   OTHERCALL       the same for a server that is not nuza's
+//   SNEAKYCALL      a shell command titled like one of nuza's tools
 //   REJECT_MODEL    the model that replaced the start one is turned down too
 //   REJECT_ALL      every model is turned down
 //   PROPOSE         proposes edits to the first two sentences of the note it
@@ -159,6 +160,32 @@ function noteIn(text) {
   return match ? match[2] : null;
 }
 
+/**
+ * What the stand-in says about a note: its title, its sections, and what was
+ * selected in it. It reads the note's shape, not its meaning - and says so.
+ */
+function answerAbout(note) {
+  if (!note)
+    return "There's no note text to go on here. Open a note, or turn on sending the whole note, and ask again.";
+  const selected = /⟦selection⟧([\s\S]*?)⟦\/selection⟧/.exec(note)?.[1]?.trim();
+  const lines = note.replace(/⟦\/?selection⟧/g, "").split("\n");
+  const title =
+    lines.find((line) => /^#\s/.test(line))?.replace(/^#\s+/, "") ??
+    lines.find((line) => /^title:\s*/.test(line))?.replace(/^title:\s*/, "") ??
+    "This note";
+  const sections = lines.filter((line) => /^##\s/.test(line)).map((line) => line.replace(/^##\s+/, ""));
+  const parts = [
+    sections.length
+      ? `**${title}** has ${sections.length} section${sections.length === 1 ? "" : "s"}: ${sections.join(", ")}.`
+      : `**${title}** is a single section.`,
+  ];
+  if (selected) parts.push(`The part you selected reads:\n\n> ${selected.split("\n").join("\n> ")}`);
+  parts.push(
+    "_I'm nuza's stand-in agent, so I can describe a note's shape but not understand it. Ask with PROPOSE to try suggested edits._"
+  );
+  return parts.join("\n\n");
+}
+
 /** Edits to the first two plain sentences of a note: what a real agent might suggest. */
 function editsFor(note) {
   let inFrontmatter = note.startsWith("---");
@@ -190,9 +217,11 @@ async function prompt(id, { sessionId, prompt: parts }) {
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("");
-  // Only the question, as a real agent would answer it - not nuza's framing.
+  // A question from the app, wrapped in nuza's framing, gets an answer the way
+  // an agent would give one. A bare test message is echoed, so the Rust tests
+  // can see exactly what arrived.
   const asked = /(?:Their question|The change they want[^:\n]*):\n([\s\S]*)$/.exec(text);
-  let reply = `You said: ${asked ? asked[1] : text}`;
+  let reply = asked ? answerAbout(noteIn(text) ?? session.note ?? null) : `You said: ${text}`;
 
   if (text.includes("STALL")) return void stalled.set(sessionId, id);
 
@@ -269,6 +298,18 @@ async function prompt(id, { sessionId, prompt: parts }) {
       rawInput: { server, tool: "search_vault", arguments: {} },
     });
     reply = `call outcome: ${await permissionFor(sessionId, { toolCallId: "c1", kind: "other" })}`;
+  }
+
+  if (text.includes("SNEAKYCALL")) {
+    // What an adapter that titles a command with the command itself would
+    // send, for a command that happens to look like a call to nuza.
+    const call = { toolCallId: "s1", title: "mcp__nuza__search_vault", kind: "execute", status: "pending" };
+    update(sessionId, {
+      sessionUpdate: "tool_call",
+      ...call,
+      rawInput: { command: "mcp__nuza__search_vault" },
+    });
+    reply = `call outcome: ${await permissionFor(sessionId, call)}`;
   }
 
   if (text.includes("ASK_FS")) {

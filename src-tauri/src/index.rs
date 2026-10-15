@@ -185,6 +185,11 @@ impl VaultIndex {
         Ok(index)
     }
 
+    /// The folder as it was opened, which every note's path starts with.
+    pub(crate) fn display_root(&self) -> PathBuf {
+        lock(&self.inner).display_root.clone()
+    }
+
     /// Starts over for another folder, and says which build belongs to it.
     pub(crate) fn reset(&self, display_root: &Path, resolved_root: &Path) -> u64 {
         let mut inner = lock(&self.inner);

@@ -39,6 +39,10 @@ pub(crate) struct AgentState {
     pub(crate) web_lookups: bool,
     /// Whether this window has a vault open at all.
     pub(crate) has_vault: bool,
+    /// Whether the agent may search this window's vault with nuza's tools.
+    pub(crate) vault_search: bool,
+    /// Whether the running agent can take the tools; `None` before it has said.
+    pub(crate) agent_searches: Option<bool>,
 }
 
 fn vault_of(window: &WebviewWindow) -> Option<PathBuf> {
@@ -97,14 +101,14 @@ pub(crate) fn consent_notice(config: &AgentConfig, sandboxed: bool) -> (String, 
 }
 
 #[tauri::command]
-pub(crate) fn agent_state(
+pub(crate) async fn agent_state(
     window: WebviewWindow,
     harness: State<'_, Arc<AgentHarness>>,
     store: State<'_, Store>,
-) -> AgentState {
+) -> Result<AgentState, String> {
     let agent = harness.current();
     let vault = vault_of(&window);
-    AgentState {
+    Ok(AgentState {
         label: agent.as_ref().map(AgentConfig::label),
         agent,
         sandboxed: super::start::sandboxed(),
@@ -112,7 +116,11 @@ pub(crate) fn agent_state(
             .as_deref()
             .is_some_and(|vault| store.web_lookups(vault)),
         has_vault: vault.is_some(),
-    }
+        vault_search: vault
+            .as_deref()
+            .is_some_and(|vault| store.vault_search(vault)),
+        agent_searches: harness.takes_tools().await,
+    })
 }
 
 /// What is installed. Runs local programs only, and contacts nothing.
@@ -183,6 +191,7 @@ pub(crate) async fn agent_prompt(
     window: WebviewWindow,
     text: String,
     in_full: Option<String>,
+    note_path: Option<String>,
     model: Option<String>,
     on_event: Channel<AgentEvent>,
     harness: State<'_, Arc<AgentHarness>>,
@@ -191,6 +200,9 @@ pub(crate) async fn agent_prompt(
         let _ = on_event.send(event);
     });
     let vault = vault_of(&window);
+    // The note's path in the vault, if it is one - checked here, against the
+    // window's own vault, before the agent is told it.
+    let note = note_path.and_then(|path| in_vault(&window, &path));
     // The outcome has gone down the channel already, as the turn's last event.
     let _ = harness
         .prompt(
@@ -199,6 +211,7 @@ pub(crate) async fn agent_prompt(
             Question {
                 text: &text,
                 in_full: in_full.as_deref(),
+                note: note.as_deref(),
             },
             model.as_deref(),
             emit,
@@ -222,6 +235,88 @@ pub(crate) async fn agent_new_chat(
 ) -> Result<(), String> {
     harness.new_chat(window.label()).await;
     Ok(())
+}
+
+/// `path`, relative to the window's vault and with forward slashes, if it is
+/// a file inside it.
+fn in_vault(window: &WebviewWindow, path: &str) -> Option<String> {
+    let open = crate::state::vault_of(window);
+    let found = crate::state::within_vault(&open, std::path::Path::new(path)).ok()?;
+    let root = crate::state::locked(&open.root).clone()?;
+    let relative = found.strip_prefix(&root).ok()?;
+    Some(
+        relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// Lets the agent search and read this window's vault with nuza's tools, or
+/// stops it - for conversations started from now on.
+#[tauri::command]
+pub(crate) async fn agent_set_vault_search(
+    window: WebviewWindow,
+    allowed: bool,
+    harness: State<'_, Arc<AgentHarness>>,
+    store: State<'_, Store>,
+) -> Result<(), String> {
+    let vault = vault_of(&window).ok_or("Open a folder first")?;
+    store.update(|decisions| {
+        decisions.no_search_vaults.retain(|kept| kept != &vault);
+        if !allowed {
+            decisions.no_search_vaults.push(vault.clone());
+        }
+    });
+    // The conversation under way was started with or without the tools; the
+    // next one is started the new way.
+    harness.new_chat(window.label()).await;
+    Ok(())
+}
+
+/// The notes this window's agent has been shown, which are the only ones a
+/// citation in its answer may link to.
+#[tauri::command]
+pub(crate) async fn agent_citable(
+    window: WebviewWindow,
+    harness: State<'_, Arc<AgentHarness>>,
+    tools: State<'_, Arc<super::tools::AppVaultTools>>,
+) -> Result<Vec<String>, String> {
+    let (Some(token), Some(server)) = (harness.tools_token(window.label()).await, tools.running())
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(server.given(&token))
+}
+
+/// Where a citation points: a note the agent was shown, and the line its
+/// paragraph starts on.
+#[derive(Debug, Serialize)]
+pub(crate) struct Cited {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+}
+
+/// Finds a citation's note, for the panel to open it at the paragraph cited.
+#[tauri::command]
+pub(crate) async fn agent_cite(
+    window: WebviewWindow,
+    path: String,
+    paragraph: Option<usize>,
+    harness: State<'_, Arc<AgentHarness>>,
+    tools: State<'_, Arc<super::tools::AppVaultTools>>,
+) -> Result<Cited, String> {
+    let not_given = || "That note wasn't one the agent was shown".to_string();
+    let token = harness
+        .tools_token(window.label())
+        .await
+        .ok_or_else(not_given)?;
+    let server = tools.running().ok_or_else(not_given)?;
+    let (path, line) = server
+        .locate(&token, &path, paragraph)
+        .ok_or_else(not_given)?;
+    Ok(Cited { path, line })
 }
 
 /// Starts `codex login`, which opens a browser of its own.

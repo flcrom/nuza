@@ -71,6 +71,9 @@ pub(crate) struct Question<'a> {
     /// for a conversation the agent does not have: a new one, or one it lost
     /// when it restarted. Only the harness knows which it will be.
     pub(crate) in_full: Option<&'a str>,
+    /// The note the question is about, by its path in the vault, for an
+    /// agent that can read the rest of it with nuza's tools.
+    pub(crate) note: Option<&'a str>,
 }
 
 impl<'a> From<&'a str> for Question<'a> {
@@ -78,9 +81,40 @@ impl<'a> From<&'a str> for Question<'a> {
         Self {
             text,
             in_full: None,
+            note: None,
         }
     }
 }
+
+/// What gives a session nuza's vault tools: the read-only server in
+/// `vaultserver.rs`, in the app; a stand-in, in the tests.
+pub(crate) trait VaultTools: Send + Sync {
+    /// The server, and a token for `window`'s vault, if this session may have
+    /// them - the person can turn the tools off for a vault.
+    fn open(&self, window: &str, vault: &Path) -> Option<ToolAccess>;
+    /// The token stops working.
+    fn close(&self, token: &str);
+}
+
+pub(crate) struct ToolAccess {
+    pub(crate) url: String,
+    pub(crate) token: String,
+}
+
+/// A session's hold on the vault tools, let go of with the session.
+struct ToolGrant {
+    tools: Arc<dyn VaultTools>,
+    token: String,
+}
+
+impl Drop for ToolGrant {
+    fn drop(&mut self) {
+        self.tools.close(&self.token);
+    }
+}
+
+/// Said to the agent, in a new conversation that has nuza's vault tools.
+pub(crate) const TOOLS_PARAGRAPH: &str = "You have tools from a server named `nuza` that read the writer's notes: `search_vault` finds passages across them, `read_note` reads one in full or from a heading, `outline` shows a note's headings, `backlinks` shows what links to it, and `list_notes`, `list_tags` and `notes_with_tag` show what there is. They only read. Use them when the text here is not enough. Cite a note you used as a Markdown link with a `nuza:` address, `[title](nuza:<path>)`, or `nuza:<path>#<paragraph>` when you know its ¶ number, using only paths the tools gave you.";
 
 /// A model the person's plan offers, for the picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -106,6 +140,8 @@ pub(crate) struct AgentHarness {
     turns: Arc<Mutex<HashMap<String, Turn>>>,
     models: Mutex<ModelState>,
     policy: Arc<Policy>,
+    /// What gives sessions nuza's vault tools, when anything does.
+    tools: Option<Arc<dyn VaultTools>>,
     /// Where every session's empty working directory is made.
     sessions_root: PathBuf,
     idle_timeout: Duration,
@@ -121,6 +157,8 @@ struct Connection {
     process: u64,
     /// The agent can pick a session up again after it restarted.
     can_resume: bool,
+    /// The agent can take an MCP server over HTTP - nuza's vault tools.
+    http_mcp: bool,
 }
 
 struct Session {
@@ -128,6 +166,8 @@ struct Session {
     vault: Option<PathBuf>,
     process: u64,
     model: Option<String>,
+    /// Its hold on the vault tools, if it has them; let go of with it.
+    tools: Option<ToolGrant>,
     /// Removed when the session is let go.
     _cwd: tempfile::TempDir,
 }
@@ -154,11 +194,75 @@ struct ModelState {
 pub(crate) struct Policy {
     web_vaults: Mutex<HashSet<PathBuf>>,
     session_vaults: Mutex<HashMap<String, PathBuf>>,
+    /// Tool calls, by id, that were announced as calls to nuza's own server.
+    nuza_calls: Mutex<HashSet<String>>,
+}
+
+/// Whether a tool call - as announced, or as asked permission for - is a
+/// call to one of nuza's own vault tools.
+///
+/// Matched on the tool's exact name, never on a prefix of a title: some
+/// adapters title a shell command with the command itself, and a command
+/// that starts with `mcp__nuza__` must not pass for a call to nuza. And never
+/// for a call whose kind is to run, change or fetch something, whatever it
+/// is named.
+pub(crate) fn is_nuza_call(call: &Value) -> bool {
+    let kind = call.get("kind").and_then(Value::as_str);
+    if matches!(kind, Some("execute" | "edit" | "delete" | "move" | "fetch")) {
+        return false;
+    }
+    let tool = |name: &str| crate::vaultserver::TOOL_NAMES.contains(&name);
+    let named = |text: Option<&str>| {
+        text.is_some_and(|text| {
+            text.strip_prefix("mcp__nuza__")
+                .or_else(|| text.strip_prefix("mcp.nuza."))
+                .is_some_and(tool)
+        })
+    };
+    let raw_server = call.pointer("/rawInput/server").and_then(Value::as_str)
+        == Some(crate::vaultserver::SERVER_NAME)
+        && call
+            .pointer("/rawInput/tool")
+            .and_then(Value::as_str)
+            .is_some_and(tool);
+    raw_server
+        || named(call.get("title").and_then(Value::as_str))
+        || named(
+            call.pointer("/_meta/claudeCode/toolName")
+                .and_then(Value::as_str),
+        )
 }
 
 impl Gate for Policy {
+    fn saw(&self, update: &Value) {
+        let Some(update) = update.get("update") else {
+            return;
+        };
+        let kind = update.get("sessionUpdate").and_then(Value::as_str);
+        if !matches!(kind, Some("tool_call" | "tool_call_update")) || !is_nuza_call(update) {
+            return;
+        }
+        if let Some(id) = update.get("toolCallId").and_then(Value::as_str) {
+            locked(&self.nuza_calls).insert(id.to_string());
+        }
+    }
+
     fn allows(&self, request: &Value) -> bool {
-        let is_fetch = request.pointer("/toolCall/kind").and_then(Value::as_str) == Some("fetch");
+        let Some(call) = request.get("toolCall") else {
+            return false;
+        };
+        // A call to nuza's own read-only server, as it was announced or as it
+        // is asked for - but never one whose kind is to run or change things.
+        let announced = call
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| locked(&self.nuza_calls).contains(id));
+        let kind = call.get("kind").and_then(Value::as_str);
+        let harmless = !matches!(kind, Some("execute" | "edit" | "delete" | "move" | "fetch"));
+        if (announced && harmless) || is_nuza_call(call) {
+            return true;
+        }
+        let is_fetch = kind == Some("fetch");
         let Some(session) = request.get("sessionId").and_then(Value::as_str) else {
             return false;
         };
@@ -178,10 +282,36 @@ impl AgentHarness {
             turns: Arc::default(),
             models: Mutex::default(),
             policy: Arc::default(),
+            tools: None,
             sessions_root,
             idle_timeout: TURN_IDLE_TIMEOUT,
             coalesce: (COALESCE_EVERY, COALESCE_BYTES),
         }
+    }
+
+    /// Gives sessions nuza's vault tools, from `tools`, where the agent can take them.
+    pub(crate) fn with_tools(mut self, tools: Arc<dyn VaultTools>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Whether the running agent can take nuza's vault tools; `None` before it
+    /// has started and said.
+    pub(crate) async fn takes_tools(&self) -> Option<bool> {
+        self.connection
+            .lock()
+            .await
+            .as_ref()
+            .map(|connection| connection.http_mcp)
+    }
+
+    /// The token `window`'s session reads the vault with, if it has one.
+    pub(crate) async fn tools_token(&self, window: &str) -> Option<String> {
+        self.sessions
+            .lock()
+            .await
+            .get(window)
+            .and_then(|session| session.tools.as_ref().map(|grant| grant.token.clone()))
     }
 
     #[cfg(test)]
@@ -339,14 +469,26 @@ impl AgentHarness {
             (None, error)
         };
         let connection = self.connection().await.map_err(fail_now)?;
-        let (session, fresh) = self
+        let (session, fresh, has_tools) = self
             .session_for(&connection, config, window, vault, sink)
             .await
             .map_err(fail_now)?;
-        let text = match question.in_full {
+        let asked = match question.in_full {
             Some(in_full) if fresh => in_full,
             _ => question.text,
         };
+        // An agent with the vault tools is told so at the start of the
+        // conversation, and told where the note is each time it is asked.
+        let mut said = Vec::new();
+        if has_tools && fresh {
+            said.push(TOOLS_PARAGRAPH.to_string());
+        }
+        if let Some(note) = question.note.filter(|_| has_tools) {
+            said.push(format!("(The note being asked about is `{note}` in the vault; `read_note` reads all of it.)"));
+        }
+        said.push(asked.to_string());
+        let text = said.join("\n\n");
+        let text = text.as_str();
 
         locked(&self.turns).insert(
             session.clone(),
@@ -516,6 +658,10 @@ impl AgentHarness {
             client: Arc::new(client),
             inbound,
             process: self.started.fetch_add(1, Ordering::Relaxed) + 1,
+            http_mcp: hello
+                .pointer("/agentCapabilities/mcpCapabilities/http")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             can_resume: hello
                 .pointer("/agentCapabilities/sessionCapabilities/resume")
                 .is_some(),
@@ -534,11 +680,11 @@ impl AgentHarness {
         window: &str,
         vault: Option<&Path>,
         sink: &mpsc::UnboundedSender<AgentEvent>,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, bool), String> {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.get(window) {
             if session.process == connection.process && session.vault.as_deref() == vault {
-                return Ok((session.id.clone(), false));
+                return Ok((session.id.clone(), false, session.tools.is_some()));
             }
         }
         let previous = sessions.remove(window);
@@ -550,7 +696,32 @@ impl AgentHarness {
         // an agent in a "read-only" session may still write in its own
         // working directory.
         let cwd = self.fresh_cwd()?;
-        let servers = json!([]);
+        // nuza's vault tools, for an agent that can take them, on a vault
+        // whose owner has not turned them off. Otherwise none: the note text
+        // in the prompt is all the agent has.
+        let tools = match (&self.tools, vault) {
+            (Some(tools), Some(vault)) if connection.http_mcp => {
+                tools.open(window, vault).map(|access| {
+                    (
+                        access.url,
+                        ToolGrant {
+                            tools: Arc::clone(tools),
+                            token: access.token,
+                        },
+                    )
+                })
+            }
+            _ => None,
+        };
+        let servers = match &tools {
+            Some((url, grant)) => json!([{
+                "type": "http",
+                "name": crate::vaultserver::SERVER_NAME,
+                "url": url,
+                "headers": [{ "name": "Authorization", "value": format!("Bearer {}", grant.token) }],
+            }]),
+            None => json!([]),
+        };
 
         // A conversation the agent was in before it restarted is picked up
         // again where the agent can do that; otherwise the person is told.
@@ -616,10 +787,14 @@ impl AgentHarness {
                 vault: vault.map(Path::to_path_buf),
                 process: connection.process,
                 model,
+                tools: tools.map(|(_, grant)| grant),
                 _cwd: cwd,
             },
         );
-        Ok((id, fresh))
+        let has_tools = sessions
+            .get(window)
+            .is_some_and(|session| session.tools.is_some());
+        Ok((id, fresh, has_tools))
     }
 
     fn fresh_cwd(&self) -> Result<tempfile::TempDir, String> {
@@ -1064,6 +1239,24 @@ fn pick_model(current: Option<&str>, offered: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_panel_hides_from_answers_matches_what_the_harness_says() {
+        // The panel takes these out of any answer that recites them; they
+        // must be the words this file really sends.
+        let panel = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/ai/prompt.ts"),
+        )
+        .unwrap();
+        for phrase in [
+            "You have tools from a server named `nuza`",
+            "Cite a note you used as a Markdown link with a `nuza:` address",
+        ] {
+            assert!(TOOLS_PARAGRAPH.contains(phrase), "{phrase}");
+            assert!(panel.contains(phrase), "prompt.ts does not hide {phrase}");
+        }
+        assert!(panel.contains("(The note being asked about is `"));
+    }
 
     #[test]
     fn models_are_read_from_either_shape() {

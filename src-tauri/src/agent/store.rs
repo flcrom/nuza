@@ -29,6 +29,9 @@ pub(crate) struct Decisions {
     pub(crate) approved: Vec<String>,
     /// Vaults on which the agent may look things up on the web.
     pub(crate) web_vaults: Vec<PathBuf>,
+    /// Vaults whose owner turned the vault tools off. They are on everywhere
+    /// else - the note text is sent either way, and the tools only read.
+    pub(crate) no_search_vaults: Vec<PathBuf>,
 }
 
 pub(crate) struct Store {
@@ -73,6 +76,14 @@ impl Store {
 
     pub(crate) fn approved(&self, config: &AgentConfig) -> bool {
         locked(&self.decisions).approved.contains(&config.id())
+    }
+
+    /// Whether the agent may search and read `vault` with nuza's tools.
+    pub(crate) fn vault_search(&self, vault: &Path) -> bool {
+        !locked(&self.decisions)
+            .no_search_vaults
+            .iter()
+            .any(|kept| kept == vault)
     }
 
     pub(crate) fn web_lookups(&self, vault: &Path) -> bool {

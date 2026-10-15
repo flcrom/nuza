@@ -2422,6 +2422,7 @@ name = "nuza"
 version = "0.10.0"
 dependencies = [
  "fontdb",
+ "getrandom 0.3.4",
  "http-range",
  "libc",
  "log",
