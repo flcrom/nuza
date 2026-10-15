@@ -853,3 +853,119 @@ pub(crate) async fn write_file(
     })
     .await
 }
+
+/// A new note at `path` - relative to the vault, with `/` between folders -
+/// holding `content`: what the AI panel makes when the writer accepts a note
+/// the agent suggested. Its folders are made as needed, all inside the
+/// vault; a note already there is never written over. Returns where it is.
+#[tauri::command]
+pub(crate) async fn create_note<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    path: String,
+    content: String,
+) -> Result<String, String> {
+    off_thread(move || {
+        let vault = vault_of(&window);
+        let root = crate::state::locked(&vault.root)
+            .clone()
+            .ok_or_else(|| "Open a folder first".to_string())?;
+        let relative = note_path(&path)?;
+        let target = root.join(&relative);
+
+        // Each missing folder on the way, made only once the one above it is
+        // known to be inside the vault.
+        let mut folder = root.clone();
+        if let Some(parents) = relative.parent() {
+            for part in parents.components() {
+                folder = folder.join(part);
+                if !folder.exists() {
+                    within_vault_to_create(&vault, &folder)?;
+                    fs::create_dir(&folder).map_err(|error| error.to_string())?;
+                }
+            }
+        }
+        let path = within_vault_to_create(&vault, &target)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| match already_exists(&error) {
+                true => format!("\"{}\" already exists", relative.display()),
+                false => error.to_string(),
+            })?;
+        std::io::Write::write_all(&mut file, content.as_bytes())
+            .map_err(|error| error.to_string())?;
+        note_changes(&window, &[&path]);
+        // Spelled the way the file tree spells it - from the folder as it was
+        // opened, not as it resolves - so it opens as the note the tree shows.
+        let shown = vault.index.display_root();
+        let shown = if shown.as_os_str().is_empty() {
+            root
+        } else {
+            shown
+        };
+        Ok(shown.join(&relative).to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// `path` as a note's place in the vault: relative, nothing that climbs out,
+/// and ending in `.md` - added when it does not.
+pub(crate) fn note_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim().trim_start_matches("./");
+    let refused = || format!("\"{path}\" is not somewhere in this folder a note can go");
+    if trimmed.is_empty() || trimmed.len() > 240 {
+        return Err(refused());
+    }
+    let mut relative = PathBuf::new();
+    for part in trimmed.split(['/', '\\']) {
+        let part = part.trim();
+        if part.is_empty() || part == "." || part == ".." || part.contains(':') {
+            return Err(refused());
+        }
+        relative.push(part);
+    }
+    if Path::new(trimmed).is_absolute() {
+        return Err(refused());
+    }
+    if !relative
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+    {
+        relative.set_extension(match relative.extension() {
+            Some(extension) => format!("{}.md", extension.to_string_lossy()),
+            None => "md".to_string(),
+        });
+    }
+    Ok(relative)
+}
+
+#[cfg(test)]
+mod note_path_tests {
+    use super::note_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_new_note_goes_inside_the_vault_and_is_markdown() {
+        assert_eq!(
+            note_path("ideas/launch.md").unwrap(),
+            PathBuf::from("ideas").join("launch.md")
+        );
+        assert_eq!(note_path("./launch").unwrap(), PathBuf::from("launch.md"));
+        assert_eq!(
+            note_path("v1.2 notes").unwrap(),
+            PathBuf::from("v1.2 notes.md")
+        );
+        for refused in [
+            "",
+            "../escape.md",
+            "a/../../b.md",
+            "/etc/passwd",
+            "C:\\x.md",
+            "a//b.md",
+            "~/x.md:y",
+        ] {
+            assert!(note_path(refused).is_err(), "{refused}");
+        }
+    }
+}

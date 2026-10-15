@@ -85,6 +85,21 @@ function isTyping(target: EventTarget | null): boolean {
 }
 
 /**
+ * Whether the keystroke belongs to the part of the window it landed in.
+ *
+ * A region marks the chords it handles itself with `data-own-keys` - the AI
+ * panel takes mod+. to stop an answer, where everywhere else it is Zen Mode.
+ * Inside it, those chords are left to it; everything else still works.
+ */
+export function ownedHere(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  const owner = target.closest("[data-own-keys]");
+  const owned = owner?.getAttribute("data-own-keys");
+  return !!owned && owned.split(",").some((binding) => matchesBinding(event, binding.trim()));
+}
+
+/**
  * Wires up a single global keydown listener that dispatches to the given
  * handlers based on the current (possibly user-customized) bindings.
  * Uses the capture phase so shortcuts still fire while CodeMirror has focus.
@@ -95,6 +110,7 @@ export function useKeymapListener(
 ) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (ownedHere(e)) return;
       const typing = isTyping(e.target);
 
       for (const action of Object.keys(bindings) as KeymapAction[]) {

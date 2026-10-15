@@ -28,11 +28,18 @@ jobs:
           set -euo pipefail
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
           TAG_NAME="app-v$VERSION"
+          # A version's own notes, when it has some; the line every release
+          # has carried otherwise.
+          NOTES="docs/releases/v$VERSION.md"
+          if [ ! -f "$NOTES" ]; then
+            NOTES="$RUNNER_TEMP/notes.md"
+            echo "See the assets to download this version and install." > "$NOTES"
+          fi
           if ! gh release view "$TAG_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" -R "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "Nuza v$VERSION" \
-              --notes "See the assets to download this version and install."
+              --notes-file "$NOTES"
           fi
           echo "id=$(gh release view "$TAG_NAME" -R "$GITHUB_REPOSITORY" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
 

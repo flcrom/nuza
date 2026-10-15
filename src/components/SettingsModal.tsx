@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, SlidersHorizontal, Palette, Keyboard, Info, LucideIcon } from "lucide-react";
+import { X, SlidersHorizontal, Palette, Keyboard, Info, Sparkles, LucideIcon } from "lucide-react";
 import { cn } from "cn";
 import { useExitAnimation } from "@/hooks/useExitAnimation";
 import { KeymapAction } from "@/lib/keymaps";
@@ -9,18 +9,24 @@ import { Appearance } from "@/lib/appearance";
 import AppearanceSettings from "./settings/AppearanceSettings";
 import KeymapSettings from "./settings/KeymapSettings";
 import InfoSettings from "./settings/InfoSettings";
+import AiSettings from "./settings/AiSettings";
+import type { ModelChoices } from "@/lib/ai/modelChoice";
+import type { MemoryStore } from "@/lib/ai/memory";
 
-type SettingsSection = "general" | "appearance" | "keymaps" | "info";
+type SettingsSection = "general" | "appearance" | "keymaps" | "ai" | "info";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "keymaps", label: "Keymaps", icon: Keyboard },
+  { id: "ai", label: "AI", icon: Sparkles },
   { id: "info", label: "Info", icon: Info },
 ];
 
 interface SettingsModalProps {
   isOpen: boolean;
+  /** The pane to open on, when something asked for one. */
+  initialSection?: SettingsSection;
   onClose: () => void;
   vimEnabled: boolean;
   setVimEnabled: (enabled: boolean) => void;
@@ -56,10 +62,22 @@ interface SettingsModalProps {
   onCheckUpdates: () => void;
   onOpenDownloadPage: () => void;
   onOpenChangelog: () => void;
+  vaultPath: string | null;
+  aiSendWholeNote: boolean;
+  setAiSendWholeNote: (enabled: boolean) => void;
+  aiEnabled: boolean;
+  setAiEnabled: (enabled: boolean) => void;
+  aiModelChoices: ModelChoices;
+  setAiModelChoices: (choices: ModelChoices) => void;
+  aiInstructions: string;
+  setAiInstructions: (instructions: string) => void;
+  aiMemory: MemoryStore;
+  setAiMemory: (memory: MemoryStore) => void;
 }
 
 export default function SettingsModal({
   isOpen,
+  initialSection,
   onClose,
   vimEnabled,
   setVimEnabled,
@@ -95,8 +113,25 @@ export default function SettingsModal({
   onCheckUpdates,
   onOpenDownloadPage,
   onOpenChangelog,
+  vaultPath,
+  aiSendWholeNote,
+  setAiSendWholeNote,
+  aiEnabled,
+  setAiEnabled,
+  aiModelChoices,
+  setAiModelChoices,
+  aiInstructions,
+  setAiInstructions,
+  aiMemory,
+  setAiMemory,
 }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+
+  // Opened from somewhere that wants a particular pane - the AI panel's
+  // "Set up" - it opens on that one.
+  useEffect(() => {
+    if (isOpen && initialSection) setActiveSection(initialSection);
+  }, [isOpen, initialSection]);
   const { isMounted, isClosing } = useExitAnimation(isOpen);
 
   useEffect(() => {
@@ -196,6 +231,22 @@ export default function SettingsModal({
                 setBinding={setKeymapBinding}
                 resetBinding={resetKeymapBinding}
                 resetAll={resetAllKeymaps}
+              />
+            )}
+
+            {activeSection === "ai" && (
+              <AiSettings
+                enabled={aiEnabled}
+                setEnabled={setAiEnabled}
+                vaultPath={vaultPath}
+                sendWholeNote={aiSendWholeNote}
+                setSendWholeNote={setAiSendWholeNote}
+                modelChoices={aiModelChoices}
+                setModelChoices={setAiModelChoices}
+                instructions={aiInstructions}
+                setInstructions={setAiInstructions}
+                memory={aiMemory}
+                setMemory={setAiMemory}
               />
             )}
 
