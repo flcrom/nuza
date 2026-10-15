@@ -316,3 +316,50 @@ describe("the list of chats", () => {
     expect(markup).toContain("No earlier chats in this folder.");
   });
 });
+
+describe("a new note the agent suggested", () => {
+  const withNote = (status: "pending" | "created" | "failed", error: string | null = null) =>
+    renderToStaticMarkup(
+      <TurnView
+        turn={{
+          ...turn([
+            { kind: "token", text: "Here is a note for the launch." },
+            { kind: "done", stop_reason: "end_turn" },
+          ]),
+          notes: [
+            {
+              id: "note-1-0",
+              path: "ideas/launch.md",
+              content: "---\ntags: [launch]\n---\n# Launch\n\nSee [[release]].",
+              why: "As asked.",
+              status,
+              error,
+            },
+          ],
+        }}
+        agent="OpenCode"
+        actions={{ onRetry: () => {}, onOpenSettings: () => {} }}
+      />
+    );
+
+  test("shows where it would go and what it says, to create or discard", () => {
+    const markup = withNote("pending");
+    expect(markup).toContain("New note");
+    expect(markup).toContain("ideas/launch.md");
+    expect(markup).toContain("tags: [launch]");
+    expect(markup).toContain(">Create<");
+    expect(markup).toContain(">Discard<");
+  });
+
+  test("once made, says so and offers nothing more", () => {
+    const markup = withNote("created");
+    expect(markup).toContain("Created");
+    expect(markup).not.toContain(">Create<");
+  });
+
+  test("when it could not be made, says why and can be tried again", () => {
+    const markup = withNote("failed", '"ideas/launch.md" already exists');
+    expect(markup).toContain("already exists");
+    expect(markup).toContain(">Create<");
+  });
+});

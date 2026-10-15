@@ -1,6 +1,7 @@
-import { Check, ChevronRight, FileText, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronRight, FilePlus, FileText, LoaderCircle, X } from "lucide-react";
+import { cn } from "cn";
 import { tookFor } from "@/lib/ai/time";
-import type { ChatTurn, EditCard } from "@/hooks/useAiChat";
+import type { ChatTurn, EditCard, NoteCard } from "@/hooks/useAiChat";
 import type { AgentErrorKind } from "@/lib/ai/protocol";
 import { forDisplay } from "@/lib/ai/answerMarkdown";
 import { hasEditsBlock, proseOf } from "@/lib/ai/proposals";
@@ -19,6 +20,68 @@ export interface TurnActions {
   onFocus?: (turn: ChatTurn, card: EditCard | null) => void;
   /** Draws the turn's edits over its note, once it is open. */
   onShow?: (turn: ChatTurn) => void;
+  /** Makes a note the agent suggested, and opens it. */
+  onCreateNote?: (turn: ChatTurn, note: NoteCard) => void;
+  onDiscardNote?: (turn: ChatTurn, note: NoteCard) => void;
+}
+
+/** How much of a suggested note shows before it is made. */
+const PREVIEW_LINES = 12;
+
+/** The new notes a turn suggested: each made only when the writer says so. */
+function NewNotes({ turn, actions }: { turn: ChatTurn; actions: TurnActions }) {
+  if (!turn.notes?.length) return null;
+  return (
+    <div className="space-y-2 pt-1">
+      {turn.notes.map((note) => {
+        const lines = note.content.split("\n");
+        const preview = lines.slice(0, PREVIEW_LINES).join("\n");
+        return (
+          <div
+            key={note.id}
+            className={cn(
+              "animate-ai-in space-y-1.5 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2.5 text-xs",
+              note.status !== "pending" && "opacity-70"
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5 text-gray-300">
+                <FilePlus size={12} className="shrink-0 text-[var(--nuza-accent)]" aria-hidden />
+                <span className="text-gray-500">New note</span>
+                <span className="truncate font-medium">{note.path}</span>
+              </span>
+              {note.status === "created" && <span className="shrink-0 text-gray-500">Created</span>}
+              {note.status === "discarded" && <span className="shrink-0 text-gray-500">Discarded</span>}
+            </div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-950/60 p-2 font-mono text-[11px] leading-snug text-gray-300">
+              {preview}
+              {lines.length > PREVIEW_LINES ? `\n… ${lines.length - PREVIEW_LINES} more lines` : ""}
+            </pre>
+            {note.why && <p className="text-gray-500">{note.why}</p>}
+            {note.status === "failed" && note.error && <p className="text-amber-400/90">{note.error}</p>}
+            {(note.status === "pending" || note.status === "failed") && (
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className={SMALL_BUTTON}
+                  onClick={() => actions.onDiscardNote?.(turn, note)}
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  className={SMALL_BUTTON}
+                  onClick={() => actions.onCreateNote?.(turn, note)}
+                >
+                  Create
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 const SMALL_BUTTON =
@@ -281,6 +344,7 @@ export default function TurnView({ turn, agent, actions }: TurnViewProps) {
         </p>
       )}
       <Edits turn={turn} actions={actions} />
+      <NewNotes turn={turn} actions={actions} />
       {answer.state === "done" && answer.stopReason === "cancelled" && (
         <p className="text-xs text-gray-500">Stopped.</p>
       )}
@@ -290,9 +354,13 @@ export default function TurnView({ turn, agent, actions }: TurnViewProps) {
       {answer.state === "done" && answer.stopReason === "max_tokens" && (
         <p className="text-xs text-gray-500">{agent} ran out of room before it finished.</p>
       )}
-      {answer.state === "done" && !hasWords && !turn.edits && answer.stopReason === "end_turn" && (
-        <p className="text-xs text-gray-500">{agent} finished without saying anything.</p>
-      )}
+      {answer.state === "done" &&
+        !hasWords &&
+        !turn.edits &&
+        !turn.notes?.length &&
+        answer.stopReason === "end_turn" && (
+          <p className="text-xs text-gray-500">{agent} finished without saying anything.</p>
+        )}
       {answer.state === "failed" && answer.error && (
         <div
           role="alert"

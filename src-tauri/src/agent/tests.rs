@@ -1928,3 +1928,20 @@ mod drill {
         run(AgentConfig::Codex, true).await;
     }
 }
+
+/// Opt-in: a prompt the panel built (in `NUZA_PROMPT_FILE`), sent to a real
+/// OpenCode as it is, for checking how the panel's rules land with a model.
+#[tokio::test]
+#[ignore = "runs real OpenCode on a prompt from a file"]
+async fn real_opencode_answers_a_prompt_from_a_file() {
+    let file = std::env::var("NUZA_PROMPT_FILE").expect("NUZA_PROMPT_FILE");
+    let prompt = std::fs::read_to_string(file).unwrap();
+    let harness = real_agent(AgentConfig::OpenCode).await;
+    let panel = Panel::default();
+    let outcome = harness
+        .prompt("main", None, prompt.as_str(), None, panel.emit())
+        .await;
+    println!("ANSWER: {}", panel.said());
+    println!("OUTCOME: {outcome:?}");
+    harness.shutdown().await;
+}

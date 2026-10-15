@@ -205,6 +205,32 @@ function answerAbout(note) {
   return parts.join("\n\n");
 }
 
+/**
+ * A new note, linked both ways: it links back to the note asked about, and an
+ * edit links that note to it - what a real agent is told to do.
+ */
+function suggestNote(text) {
+  const title = /The note: (.+)/.exec(text)?.[1]?.replace(/\.md$/, "").trim();
+  const note = noteIn(text);
+  const firstLine = note?.split("\n").find((line) => line.trim() && !line.startsWith("---"));
+  const entries = [
+    {
+      create: "Stand-in note.md",
+      content: `---\ntags: [draft]\n---\n# Stand-in note\n\nA placeholder from nuza's stand-in agent${title ? `, made from [[${title}]]` : ""}.\n\n| Column | Value |\n| --- | --- |\n| one | $x^2$ |\n`,
+      why: "A stand-in's new note, to try making one.",
+    },
+  ];
+  if (firstLine) {
+    const anchor = firstLine.replace(/⟦\/?selection⟧/g, "");
+    entries.push({
+      find: anchor,
+      replace: `${anchor} See [[Stand-in note]].`,
+      why: "Links this note to the new one.",
+    });
+  }
+  return `Here's a new note - nuza's stand-in agent, so it's only a placeholder.\n\n${editsBlock(entries)}`;
+}
+
 /** An edit to what was selected - or, with nothing selected, to the note's first sentences. */
 function suggestChange(note) {
   if (!note) return "There's no note text to change here.";
@@ -263,10 +289,14 @@ async function prompt(id, { sessionId, prompt: parts }) {
     /\b(rephrase|reword|rewrite|improve|proofread|fix|shorten|tighten|simplify|synonym)\b/i.test(
       text.split("Their question:").at(-1) ?? ""
     );
+  const question = text.split(/Their question:|The change they want[^\n]*:/).at(-1) ?? "";
+  const wantsNote = /\b(new|another|separate) note\b|\bcreate (a )?note\b/i.test(question);
   let reply = asked
-    ? wantsChange
-      ? suggestChange(noteIn(text) ?? session.note ?? null)
-      : answerAbout(noteIn(text) ?? session.note ?? null)
+    ? wantsNote
+      ? suggestNote(text)
+      : wantsChange
+        ? suggestChange(noteIn(text) ?? session.note ?? null)
+        : answerAbout(noteIn(text) ?? session.note ?? null)
     : `You said: ${text}`;
 
   if (text.includes("STALL")) return void stalled.set(sessionId, id);

@@ -131,9 +131,33 @@ describe("the prompt", () => {
   });
 
   test("with no note sent there is nothing to edit, and no edits are asked for", () => {
-    expect(buildPrompt({ agent: "Codex", question: "?", context: null, intent: "ask" })).not.toContain(
-      "nuza-edits"
-    );
+    const prompt = buildPrompt({ agent: "Codex", question: "?", context: null, intent: "ask" });
+    expect(prompt).not.toContain('"find"');
+    // A new note can still be asked for.
+    expect(prompt).toContain('{"create": "folder/name.md"');
+  });
+
+  test("keeps the agent to the writer's notes, and says how to turn the rest down", () => {
+    const prompt = buildPrompt({ agent: "Codex", question: "?", context: note, intent: "ask" }, "n0");
+    expect(prompt).toContain("You are here for their notes and their writing");
+    expect(prompt).toContain("is out of scope: say so in one sentence");
+  });
+
+  test("teaches nuza's markdown: frontmatter, links and backlinks, tables, math", () => {
+    const prompt = buildPrompt({ agent: "Codex", question: "?", context: null, intent: "ask" });
+    for (const piece of [
+      "Frontmatter: YAML",
+      "[[Note|shown text]]",
+      "Backlinks are worked out",
+      "| --- |",
+      "KaTeX",
+    ])
+      expect(prompt).toContain(piece);
+  });
+
+  test("a new note is linked both ways, so each shows in the other's backlinks", () => {
+    const prompt = buildPrompt({ agent: "Codex", question: "?", context: note, intent: "ask" }, "n0");
+    expect(prompt).toContain("[[its name]] in this note, as an edit, and [[this note]] in it");
   });
 
   test("edits the writer turned down are carried into the next message, once", () => {

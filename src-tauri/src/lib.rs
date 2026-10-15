@@ -196,6 +196,7 @@ pub fn run() {
             recovery::take_recovery,
             recovery::drop_recovery,
             files::create_file,
+            files::create_note,
             files::create_folder,
             files::rename_entry,
             files::move_entry,

@@ -596,6 +596,15 @@ const AiPanel = forwardRef<AiPanelHandle, AiPanelProps>(function AiPanel(
                     onRejectAll: (turn) => decide(turn, null, false),
                     onFocus: focus,
                     onShow: (turn) => void show(turn),
+                    onCreateNote: (turn, note) => {
+                      invoke<string>("create_note", { path: note.path, content: note.content })
+                        .then((made) => {
+                          chat.markNote(turn.id, note.id, "created");
+                          void openNote(made);
+                        })
+                        .catch((error) => chat.markNote(turn.id, note.id, "failed", String(error)));
+                    },
+                    onDiscardNote: (turn, note) => chat.markNote(turn.id, note.id, "discarded"),
                   }}
                 />
               ))}

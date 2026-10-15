@@ -8,6 +8,9 @@ import {
   parseProposals,
   proseOf,
   retryRequest,
+  newNotesIn,
+  MAX_NEW_NOTES,
+  editsIn,
 } from "../src/lib/ai/proposals";
 import { SELECTION_END, SELECTION_START } from "../src/lib/ai/prompt";
 
@@ -259,5 +262,46 @@ describe("a change asked for the selection alone", () => {
 
   test("the retry says to stay inside the selection", () => {
     expect(retryRequest([1], true)).toContain("from inside the selection marks");
+  });
+});
+
+describe("a new note the agent suggests", () => {
+  const answer = (entries: unknown) => "Here it is.\n\n```nuza-edits\n" + JSON.stringify(entries) + "\n```";
+
+  test("comes out of the same block as the edits, and the edits still parse", () => {
+    const text = answer([
+      { create: "ideas/launch.md", content: "# Launch\n\nSee [[release]].\n", why: "As asked." },
+      { find: "Ship in March.", replace: "Ship in March. See [[launch]].", why: "Link it." },
+    ]);
+    expect(newNotesIn(text)).toEqual([
+      { path: "ideas/launch.md", content: "# Launch\n\nSee [[release]].\n", why: "As asked." },
+    ]);
+    const parsed = parseProposals(text, "# Plan\n\nShip in March.\n");
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.proposals).toHaveLength(1);
+  });
+
+  test("one that would land outside the folder is left out", () => {
+    const notes = newNotesIn(
+      answer([
+        { create: "../outside.md", content: "x" },
+        { create: "/etc/hosts", content: "x" },
+        { create: "C:\\notes\\x.md", content: "x" },
+        { create: "a//b.md", content: "x" },
+        { create: "fine.md", content: "x" },
+      ])
+    );
+    expect(notes.map((note) => note.path)).toEqual(["fine.md"]);
+  });
+
+  test("one without a path or content is left out, and only so many are taken", () => {
+    expect(newNotesIn(answer([{ create: "x.md" }, { content: "y" }]))).toEqual([]);
+    const many = Array.from({ length: MAX_NEW_NOTES + 3 }, (_, n) => ({ create: `n${n}.md`, content: "x" }));
+    expect(newNotesIn(answer(many))).toHaveLength(MAX_NEW_NOTES);
+  });
+
+  test("an answer with only a new note has no edits to draw", () => {
+    const read = editsIn(answer([{ create: "x.md", content: "# X" }]));
+    expect(read.ok && read.edits).toEqual([]);
   });
 });

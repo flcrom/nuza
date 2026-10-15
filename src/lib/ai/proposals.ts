@@ -114,10 +114,11 @@ export function editsIn(
     return { ok: false, reason: "malformed", detail: error instanceof Error ? error.message : String(error) };
   }
   if (!Array.isArray(parsed)) return { ok: false, reason: "malformed", detail: "not a list of edits" };
-  if (parsed.length > MAX_EDITS) return { ok: false, reason: "too-many", detail: `${parsed.length} edits` };
+  const changes = parsed.filter((entry) => !isNewNote(entry));
+  if (changes.length > MAX_EDITS) return { ok: false, reason: "too-many", detail: `${changes.length} edits` };
 
   const edits: ProposedEdit[] = [];
-  for (const entry of parsed) {
+  for (const entry of changes) {
     if (typeof entry !== "object" || entry === null) return { ok: false, reason: "malformed" };
     const { find, replace, why } = entry as Record<string, unknown>;
     if (typeof find !== "string" || typeof replace !== "string") {
@@ -130,6 +131,57 @@ export function editsIn(
     edits.push({ find: anchor, replace: unmarked(replace), why: typeof why === "string" ? why.trim() : "" });
   }
   return { ok: true, edits };
+}
+
+/** A new note the agent suggests, as written. */
+export interface ProposedNote {
+  /** Its path in the vault, as the agent gave it. */
+  path: string;
+  content: string;
+  why: string;
+}
+
+/** At most this many new notes in one answer, each at most this long. */
+export const MAX_NEW_NOTES = 5;
+export const MAX_NOTE_LENGTH = 100_000;
+
+function isNewNote(entry: unknown): boolean {
+  return typeof entry === "object" && entry !== null && "create" in entry;
+}
+
+/**
+ * The new notes an answer suggests, from the same block as its edits. One
+ * that is not shaped right - no path, no text, too long, a path that climbs
+ * out with `..` - is left out; Rust checks the path again before anything is
+ * written.
+ */
+export function newNotesIn(answer: string): ProposedNote[] {
+  const block = lastBlock(answer);
+  if (!block) return [];
+  let parsed: unknown;
+  try {
+    parsed = parseJson(block.body.trim());
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const notes: ProposedNote[] = [];
+  for (const entry of parsed.filter(isNewNote)) {
+    const { create, content, why } = entry as Record<string, unknown>;
+    if (typeof create !== "string" || typeof content !== "string") continue;
+    const path = create.trim().replace(/^\.\//, "");
+    if (
+      !path ||
+      path.startsWith("/") ||
+      /^[a-z]:/i.test(path) ||
+      path.split(/[\\/]/).some((part) => part === ".." || part === "") ||
+      content.length > MAX_NOTE_LENGTH
+    )
+      continue;
+    notes.push({ path, content: unmarked(content), why: typeof why === "string" ? why.trim() : "" });
+    if (notes.length === MAX_NEW_NOTES) break;
+  }
+  return notes;
 }
 
 /** A range of the note a change was asked for - what the writer selected. */

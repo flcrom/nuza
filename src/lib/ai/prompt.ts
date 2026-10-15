@@ -52,6 +52,19 @@ export const INSTRUCTIONS_LIMIT = 1000;
 /** How much of the conversation so far is carried into a fresh session. */
 const HISTORY_LIMIT = 6000;
 
+/**
+ * nuza's own markdown, so what the agent writes is what nuza draws: its
+ * frontmatter, links, embeds, tags, tables and math.
+ */
+const NUZA_MARKDOWN = [
+  "- nuza's markdown, which is what you write in:",
+  "  - Frontmatter: YAML between two `---` lines at the very top, e.g. `tags: [work, ideas]`, `date: 2026-10-15`. Keep it valid YAML; add one only when asked or when the note already has properties to extend.",
+  "  - Links between notes: `[[Note name]]`, `[[folder/Note]]`, `[[Note|shown text]]`, `[[Note#Heading]]`. Backlinks are worked out from these links; there is nothing else to update.",
+  "  - Embeds: `![[image.png]]`. Tags: `#tag` in the text (letters, digits, `_`, `-`; not only digits).",
+  "  - Tables: a header row, a `| --- |` row, one row per line, pipes lined up; `\\|` for a pipe inside a cell.",
+  "  - Math, drawn with KaTeX: `$x^2$` inline - no space just inside the dollars - and `$$` on its own lines around a block. Code goes in fences with its language.",
+].join("\n");
+
 /** The note with the selection marked, as the agent sees it. */
 export function markedNote(context: AiContext): string {
   const { note, selection } = context;
@@ -72,6 +85,9 @@ function rules(agent: string, context: AiContext | null, nonce: string): string 
     "- Match the writer's voice. Do not make it yours.",
     "- When they ask a question, answer it, briefly unless they ask for more. Do not rewrite what they did not ask about.",
     "- You cannot write files, run commands or open other folders here, and must not say that you did.",
+    "- You are here for their notes and their writing: questions about the notes, explaining, editing, drafting and organising them, and new notes they ask for. Anything else - general questions unrelated to their notes, code or homework that is not for a note, role-play, chat, or content with no place in a note - is out of scope: say so in one sentence and offer to help with the note instead. Never help with anything harmful.",
+    `- To suggest a new note when they ask for one, put {"create": "folder/name.md", "content": "...", "why": "..."} in a fenced block marked ${EDITS_FENCE} (a JSON array, alongside any edits). \`create\` is its path in their folder; \`content\` the whole note. The writer accepts it before it exists. Link it where it belongs: [[its name]] in this note, as an edit, and [[this note]] in it, so each shows up in the other's backlinks.`,
+    NUZA_MARKDOWN,
   ];
   if (context) {
     lines.push(
@@ -199,6 +215,14 @@ export const HARNESS_PHRASES = [
 export const FRAMING_PHRASES = [
   "helping someone with a note in nuza, a markdown notes app",
   "Match the writer's voice",
+  "You are here for their notes and their writing",
+  "To suggest a new note when they ask for one",
+  "nuza's markdown, which is what you write in:",
+  "Frontmatter: YAML between two",
+  "Links between notes: `[[Note name]]`",
+  "Embeds: `![[image.png]]`. Tags:",
+  "Tables: a header row, a `| --- |` row",
+  "Math, drawn with KaTeX:",
   "When they ask a question, answer it, briefly",
   "You cannot write files, run commands or open other folders here",
   "You cannot change the note yourself either",
